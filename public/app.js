@@ -148,7 +148,10 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  // Delay revoke to avoid some browsers canceling the download too early.
+  window.setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, 3000);
 }
 
 function clearLegend() {
@@ -2032,28 +2035,43 @@ exportPngButton.addEventListener("click", () => {
 exportPdfButton.addEventListener("click", async () => {
   if (!state.grid) return;
 
-  setStatus("正在准备高清 PDF...");
-  const res = await fetch("/api/generate?format=pdf", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      output: "pdf",
-      grid: state.grid,
-      legend: state.legend,
-      codeGrid: showCodesInput.checked ? state.codeGrid : null,
-      title: "Bead Pattern",
-      pdfMode: "ultra"
-    })
-  });
+  try {
+    setStatus("正在准备高清 PDF...");
+    const res = await fetch("/api/generate?format=pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        output: "pdf",
+        grid: state.grid,
+        legend: state.legend,
+        codeGrid: showCodesInput.checked ? state.codeGrid : null,
+        title: "Bead Pattern",
+        pdfMode: "ultra"
+      })
+    });
 
-  if (!res.ok) {
-    setStatus("高清 PDF 生成失败。");
-    return;
+    if (!res.ok) {
+      setStatus("高清 PDF 生成失败。");
+      return;
+    }
+
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("application/pdf")) {
+      setStatus("高清 PDF 导出失败（返回内容异常）。");
+      return;
+    }
+
+    const blob = await res.blob();
+    if (!blob || blob.size === 0) {
+      setStatus("高清 PDF 导出失败（空文件）。");
+      return;
+    }
+
+    downloadBlob(blob, "bead-pattern-ultra.pdf");
+    setStatus("高清 PDF 导出完成。");
+  } catch (_error) {
+    setStatus("高清 PDF 导出失败。");
   }
-
-  const blob = await res.blob();
-  downloadBlob(blob, "bead-pattern-ultra.pdf");
-  setStatus("高清 PDF 导出完成。");
 });
 
 zoomModalClose.addEventListener("click", closeZoomModal);
