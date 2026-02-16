@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>豆像工坊 · BeadGrid – 拼豆图纸生成器</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="hero">
+        <div class="hero-main">
+          <div class="hero-logo-wrap">
+            <img class="hero-logo" src="/assets/logo.png" alt="豆像工坊Logo" />
+          </div>
+          <div class="hero-copy">
+          <p class="eyebrow">豆像工坊</p>
+          <h1>拼豆图纸设计，就来豆像工坊</h1>
+          <p class="subhead">
+            几秒内把照片一键转换成可拼的像素网格，支持导出超清PDF与PNG
+          </p>
+          </div>
+        </div>
+      </header>
+
+      <section class="showcase">
+        <p class="scenario-line">适合：宠物头像 / 情侣头像 / 二次元角色 / 像素风插画</p>
+        <div class="sample-grid">
+          <article class="sample-card">
+            <div class="sample-thumb sample-thumb-pet"></div>
+            <p class="sample-title">宠物头像</p>
+            <p class="sample-desc">毛发细节保留，适合做礼物款。</p>
+          </article>
+          <article class="sample-card">
+            <div class="sample-thumb sample-thumb-couple"></div>
+            <p class="sample-title">情侣合照</p>
+            <p class="sample-desc">自动压色后更好拼，效果稳定。</p>
+          </article>
+          <article class="sample-card">
+            <div class="sample-thumb sample-thumb-ip"></div>
+            <p class="sample-title">角色立绘</p>
+            <p class="sample-desc">边缘清晰，色号标注直观。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="effect-showcase">
+        <div class="effect-header">
+          <h2>效果展示</h2>
+          <p>提示：拖动中间滑块对比；支持鼠标滚轮或双指缩放</p>
+        </div>
+        <div class="effect-compare">
+          <div id="effectCompareStage" class="effect-compare-stage" style="--compare-pos: 52%;">
+            <img class="effect-layer effect-layer-before" src="/assets/logoxiangsu.png" alt="拼豆图纸效果示例" />
+            <div class="effect-layer-after-wrap">
+              <img class="effect-layer effect-layer-after" src="/assets/logo.png" alt="原图示例" />
+            </div>
+            <div class="effect-badge effect-badge-before">原图</div>
+            <div class="effect-badge effect-badge-after">拼豆图纸效果</div>
+            <div class="effect-divider" aria-hidden="true"></div>
+          </div>
+          <div class="effect-compare-actions">
+            <button id="effectOpenOriginal" class="secondary" type="button">点开放大原图</button>
+            <button id="effectOpenResult" class="secondary" type="button">点开放大拼豆效果</button>
+          </div>
+        </div>
+      </section>
+      <section class="effect-cta">
+        <p>过年在家，如果还在纠结送什么礼物，不妨先上传一张你最喜欢的照片，看看拼豆像的效果。</p>
+      </section>
+
+      <main class="layout">
+        <input id="imageInput" class="file-input-hidden" type="file" accept="image/*" />
+
+        <section class="panel preview-panel">
+          <div class="panel-header">
+            <h2>预览</h2>
+            <p id="status">请先上传图片开始生成。</p>
+          </div>
+          <div class="preview-upload-guide">
+            <p>过年在家，如果还在纠结送什么礼物，不妨先上传一张你最喜欢的照片，看看拼豆像的效果。</p>
+          </div>
+          <div class="preview-top-actions">
+            <button id="previewReuploadTrigger" class="primary upload-trigger" type="button">上传图片 & 重新上传</button>
+          </div>
+
+          <div class="canvas-wrap">
+            <figure class="preview-surface">
+              <figcaption>图纸预览</figcaption>
+              <div id="patternViewport" class="zoom-viewport">
+                <canvas id="patternCanvas" class="zoom-content" width="1600" height="1600"></canvas>
+                <div id="previewEmptyState" class="preview-empty-state">
+                  <div class="preview-empty-card">
+                    <svg class="preview-empty-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm1 2v9.2l3.4-3.4a1 1 0 0 1 1.4 0l2.4 2.4 3.8-4.1a1 1 0 0 1 1.5 0L20 14V7H5zm6 3.2a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8z"></path>
+                    </svg>
+                    <p class="preview-empty-title">还没有图纸预览</p>
+                    <p class="preview-empty-desc">先上传一张图片，系统会自动生成可拼图纸。</p>
+                    <button id="previewUploadTrigger" class="primary upload-trigger" type="button">上传图片（JPG/PNG）</button>
+                  </div>
+                </div>
+                <div id="patternRulerTop" class="fixed-ruler fixed-ruler-top"></div>
+                <div id="patternRulerBottom" class="fixed-ruler fixed-ruler-bottom"></div>
+                <div id="patternRulerLeft" class="fixed-ruler fixed-ruler-left"></div>
+                <div id="patternRulerRight" class="fixed-ruler fixed-ruler-right"></div>
+                <div id="patternCoordBadge" class="coord-badge">X - / Y -</div>
+                <div class="zoom-tip">拖动画布 | 双指缩放（手机）/ Ctrl或Command+滚轮（电脑） | 点击放大</div>
+              </div>
+            </figure>
+          </div>
+
+          <p id="usageStatus" class="usage-status">当前参数下将使用 - 种颜色</p>
+          <div class="preview-guide">
+            <h3>可拼图纸提示</h3>
+            <p>放大预览会自动显示每格色号，找格子更快。</p>
+            <p>用 MARD 221 固定色盘压色，并支持对应 Artkal M 2.6mm 等主流迷你拼豆色卡，方便按号买豆和数颗粒。</p>
+            <p>适合宠物头像、情侣头像、二次元角色、像素风插画。</p>
+          </div>
+
+          <div class="legend-actions">
+            <button id="legendToggle" type="button" class="secondary legend-toggle" hidden>展开全部颜色明细</button>
+          </div>
+          <div class="legend" id="legend"></div>
+        </section>
+
+        <section class="panel form-panel">
+          <h2>参数设置</h2>
+          <p class="panel-lead">先在预览框上传图片，再按顺序设置参数。</p>
+
+          <form id="patternForm">
+
+            <label class="field">
+              <span>网格尺寸</span>
+              <select id="gridSize">
+                <option value="52">52 x 52</option>
+                <option value="104">104 x 104</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>图像风格</span>
+              <select id="samplingMode">
+                <option value="mode">卡通风</option>
+                <option value="average">写实风</option>
+              </select>
+              <small class="field-hint">卡通风（边缘更干净，适合头像 / 插画）；写实风（细节更多，适合照片）。</small>
+            </label>
+
+            <label class="field">
+              <span>色盘</span>
+              <select id="palette"></select>
+            </label>
+
+            <label class="field">
+              <span>最大边长</span>
+              <div class="range-input">
+                <input id="maxEdgeSizeRange" type="range" min="1" max="52" value="52" />
+                <input id="maxEdgeSize" type="number" min="1" max="52" value="52" />
+              </div>
+              <small class="field-hint">控制图案在画布里占多大。数值越小留白越多，调大就更接近铺满。</small>
+            </label>
+
+            <label class="field checkbox">
+              <input id="optimize" type="checkbox" checked />
+              <span>启用可拼性优化</span>
+            </label>
+            <p class="field-hint standalone-hint">自动收掉零散单颗和细碎小点，拼起来更顺手，不容易翻车。</p>
+
+            <label class="field checkbox">
+              <input id="showCodes" type="checkbox" checked />
+              <span>在格子内显示 MARD 色号</span>
+            </label>
+
+          </form>
+
+          <p class="export-hint">用 MARD 221 固定色盘压色，并支持对应 Artkal M 2.6mm 等主流迷你拼豆色卡，方便按号买豆和数颗粒。</p>
+          <div class="actions">
+            <button id="exportPng" class="primary upload-trigger export-action" disabled>导出 PNG</button>
+            <button id="exportPdf" class="primary upload-trigger export-action" disabled>导出高清 PDF</button>
+          </div>
+        </section>
+      </main>
+
+      <section class="contact-card">
+        <h3>遇到问题可以直接联系作者</h3>
+        <p>如果你在用这款生成器的过程中遇到任何问题（比如不知道选哪张照片、买哪些豆、怎么排版成礼物），可以加作者微信 <strong>Xuanlin8n</strong>，一对一帮你看图纸。</p>
+        <p>也欢迎关注公众号和小红书『豆像工坊』，获取更多宠物头像、情侣头像的拼豆案例和免费模板。</p>
+      </section>
+    </div>
+
+    <div id="zoomModal" class="zoom-modal" hidden>
+      <div id="zoomModalBackdrop" class="zoom-modal-backdrop"></div>
+      <div class="zoom-modal-card">
+        <div class="zoom-modal-header">
+          <h3 id="zoomModalTitle">放大预览</h3>
+          <div class="zoom-modal-actions">
+            <button id="zoomModalReset" class="secondary" type="button">重置</button>
+            <button id="zoomModalClose" class="secondary" type="button">关闭</button>
+          </div>
+        </div>
+        <div id="zoomModalViewport" class="zoom-viewport zoom-modal-viewport">
+          <canvas id="zoomModalCanvas" class="zoom-content" width="2400" height="2400"></canvas>
+          <div class="zoom-tip">拖动画布 | 双指缩放（手机）/ Ctrl或Command+滚轮（电脑） | 双击重置</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="effectModal" class="zoom-modal" hidden>
+      <div id="effectModalBackdrop" class="zoom-modal-backdrop"></div>
+      <div class="zoom-modal-card effect-modal-card">
+        <div class="zoom-modal-header">
+          <h3 id="effectModalTitle">效果图放大</h3>
+          <div class="zoom-modal-actions">
+            <button id="effectModalReset" class="secondary" type="button">重置</button>
+            <button id="effectModalClose" class="secondary" type="button">关闭</button>
+          </div>
+        </div>
+        <div id="effectModalViewport" class="zoom-viewport zoom-modal-viewport effect-modal-body">
+          <img id="effectModalImage" class="effect-modal-image zoom-content" alt="效果展示放大图" />
+          <div class="zoom-tip">拖动画布 | 双指缩放（手机）/ 鼠标滚轮缩放（电脑） | 双击重置</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="cropModal" class="zoom-modal" hidden>
+      <div id="cropModalBackdrop" class="zoom-modal-backdrop"></div>
+      <div class="zoom-modal-card crop-modal-card">
+        <div class="zoom-modal-header crop-modal-header">
+          <h3>裁剪图片</h3>
+          <div class="crop-mode-group">
+            <button class="crop-mode-btn" type="button" data-crop-mode="custom">自由</button>
+            <button class="crop-mode-btn" type="button" data-crop-mode="original">原图比例</button>
+            <button class="crop-mode-btn" type="button" data-crop-mode="1:1">1:1</button>
+            <button class="crop-mode-btn" type="button" data-crop-mode="3:4">3:4</button>
+            <button class="crop-mode-btn" type="button" data-crop-mode="4:3">4:3</button>
+          </div>
+          <div class="zoom-modal-actions">
+            <button id="cropReset" class="secondary" type="button">重置视图</button>
+            <button id="cropCancel" class="secondary" type="button">取消</button>
+            <button id="cropConfirm" class="primary" type="button">应用裁剪</button>
+          </div>
+        </div>
+        <div id="cropViewport" class="zoom-viewport zoom-modal-viewport crop-viewport">
+          <canvas id="cropCanvas" class="crop-canvas"></canvas>
+          <div class="zoom-tip">拖动裁剪框 | 双指缩放（手机）/ Ctrl或Command+滚轮（电脑）</div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
