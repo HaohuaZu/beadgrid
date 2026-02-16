@@ -1300,10 +1300,97 @@ function renderPdfFromGrid({ grid, legend, title, codeGrid, mode = "ultra" }) {
   return doc;
 }
 
+function countNonEmptyGridCells(grid) {
+  if (!Array.isArray(grid)) return 0;
+  let count = 0;
+  for (const row of grid) {
+    if (!Array.isArray(row)) continue;
+    for (const cell of row) {
+      if (cell) count += 1;
+    }
+  }
+  return count;
+}
+
+function createPdfBufferFromGrid({ grid, legend, title, codeGrid, mode = "ultra" }) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = renderPdfFromGrid({ grid, legend, title, codeGrid, mode });
+      const chunks = [];
+
+      doc.on("data", (chunk) => {
+        chunks.push(chunk);
+      });
+      doc.on("end", () => {
+        resolve(Buffer.concat(chunks));
+      });
+      doc.on("error", (error) => {
+        reject(error);
+      });
+
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function sendPdfDownload(res, { grid, legend, title, codeGrid, mode, filename, logTag }) {
+  const normalizedMode = mode === "a4" ? "a4" : "ultra";
+  const safeFilename = filename || "bead-pattern.pdf";
+  const pdfBuffer = await createPdfBufferFromGrid({
+    grid,
+    legend,
+    title,
+    codeGrid,
+    mode: normalizedMode
+  });
+
+  const usedCells = countNonEmptyGridCells(grid);
+  const legendCount = Array.isArray(legend) ? legend.length : 0;
+  console.log(
+    `[${logTag || "pdf-export"}] mode=${normalizedMode} grid=${grid.length} used=${usedCells} legend=${legendCount} bytes=${pdfBuffer.length}`
+  );
+
+  res.status(200);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+  res.setHeader("Content-Length", String(pdfBuffer.length));
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.end(pdfBuffer);
+}
+
 app.get("/api/palettes", (req, res) => {
   res.json({
     palettes: PALETTES
   });
+});
+
+app.post("/api/export-pdf", async (req, res) => {
+  try {
+    const { grid, legend, codeGrid, title, pdfMode } = req.body || {};
+    if (!Array.isArray(grid) || !grid.length || !Array.isArray(grid[0])) {
+      return res.status(400).json({ error: "缺少有效网格数据。" });
+    }
+
+    const safeLegend = Array.isArray(legend) ? legend : buildLegend(grid);
+    await sendPdfDownload(res, {
+      grid,
+      legend: safeLegend,
+      title: title || "Bead Pattern",
+      codeGrid: codeGrid || null,
+      mode: pdfMode === "a4" ? "a4" : "ultra",
+      filename: "bead-pattern-ultra.pdf",
+      logTag: "export-pdf"
+    });
+  } catch (error) {
+    console.error("[export-pdf] 导出失败:", error);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: "高清 PDF 导出失败。" });
+    }
+    res.end();
+  }
 });
 
 app.post("/api/generate", upload.single("image"), async (req, res) => {
@@ -1320,12 +1407,15 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
       const title = req.body.title || "Bead Pattern";
       const codeGrid = req.body.codeGrid || null;
       const pdfMode = req.body.pdfMode === "a4" ? "a4" : "ultra";
-      const doc = renderPdfFromGrid({ grid, legend, title, codeGrid, mode: pdfMode });
-
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", "attachment; filename=bead-pattern.pdf");
-      doc.pipe(res);
-      doc.end();
+      await sendPdfDownload(res, {
+        grid,
+        legend,
+        title,
+        codeGrid,
+        mode: pdfMode,
+        filename: "bead-pattern.pdf",
+        logTag: "generate-grid-pdf"
+      });
       return;
     }
 
@@ -1369,17 +1459,15 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
 
     if (output === "pdf") {
       const pdfMode = req.body.pdfMode === "a4" ? "a4" : "ultra";
-      const doc = renderPdfFromGrid({
+      await sendPdfDownload(res, {
         grid: result.grid,
         legend: result.legend,
         title: "Bead Pattern",
         codeGrid: result.codeGrid,
-        mode: pdfMode
+        mode: pdfMode,
+        filename: "bead-pattern.pdf",
+        logTag: "generate-image-pdf"
       });
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", "attachment; filename=bead-pattern.pdf");
-      doc.pipe(res);
-      doc.end();
       return;
     }
 

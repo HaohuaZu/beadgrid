@@ -2037,11 +2037,10 @@ exportPdfButton.addEventListener("click", async () => {
 
   try {
     setStatus("正在准备高清 PDF...");
-    const res = await fetch("/api/generate?format=pdf", {
+    const res = await fetch("/api/export-pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        output: "pdf",
         grid: state.grid,
         legend: state.legend,
         codeGrid: showCodesInput.checked ? state.codeGrid : null,
@@ -2068,7 +2067,8 @@ exportPdfButton.addEventListener("click", async () => {
     }
 
     downloadBlob(blob, "bead-pattern-ultra.pdf");
-    setStatus("高清 PDF 导出完成。");
+    const sizeKb = Math.max(1, Math.round(blob.size / 1024));
+    setStatus(`高清 PDF 导出完成（${sizeKb} KB）。`);
   } catch (_error) {
     setStatus("高清 PDF 导出失败。");
   }
