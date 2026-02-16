@@ -495,15 +495,15 @@ function createZoomController(viewportEl, options = {}) {
       return;
     }
     stateZoom.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (typeof viewportEl.setPointerCapture === "function") {
-      try {
-        viewportEl.setPointerCapture(event.pointerId);
-      } catch (_err) {
-        // Ignore capture failures on unsupported platforms.
-      }
-    }
 
     if (stateZoom.activePointers.size >= 2) {
+      if (typeof viewportEl.setPointerCapture === "function") {
+        try {
+          viewportEl.setPointerCapture(event.pointerId);
+        } catch (_err) {
+          // Ignore capture failures on unsupported platforms.
+        }
+      }
       stateZoom.pinching = true;
       stateZoom.dragging = false;
       stateZoom.suppressClick = true;
@@ -511,6 +511,23 @@ function createZoomController(viewportEl, options = {}) {
       stateZoom.pinchStartZoom = stateZoom.zoom;
       viewportEl.classList.remove("is-dragging");
       return;
+    }
+
+    const allowTouchPageScrollAtBaseZoom = options.allowTouchPageScrollAtBaseZoom !== false;
+    const isSingleTouch = event.pointerType === "touch" && stateZoom.activePointers.size === 1;
+    const atBaseZoom = Math.abs(stateZoom.zoom - stateZoom.minZoom) < 0.001 || stateZoom.zoom <= 1.001;
+    if (allowTouchPageScrollAtBaseZoom && isSingleTouch && atBaseZoom) {
+      stateZoom.dragging = false;
+      viewportEl.classList.remove("is-dragging");
+      return;
+    }
+
+    if (typeof viewportEl.setPointerCapture === "function") {
+      try {
+        viewportEl.setPointerCapture(event.pointerId);
+      } catch (_err) {
+        // Ignore capture failures on unsupported platforms.
+      }
     }
 
     stateZoom.dragging = true;

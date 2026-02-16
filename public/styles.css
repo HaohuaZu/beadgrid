@@ -181,7 +181,7 @@ h1 {
   background: #f8f4ed;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y pinch-zoom;
 }
 
 .effect-layer {
@@ -714,7 +714,7 @@ button:disabled {
   border: 1px solid var(--border);
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.03);
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y pinch-zoom;
 }
 
 .zoom-viewport.is-dragging {
