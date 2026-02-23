@@ -1,0 +1,91 @@
+<view class="editor-page">
+  <view class="editor-head brand-panel">
+    <view class="editor-title">{{workName}}</view>
+    <view class="editor-sub">图纸ID：{{workId}}</view>
+  </view>
+
+  <view class="editor-top-row">
+    <view class="size-chip">{{gridSizeText}}</view>
+    <view class="gesture-tip">双指缩放</view>
+    <button class="export-btn" bindtap="handleSaveExport">保存/导图</button>
+  </view>
+
+  <view class="tool-row brand-panel">
+    <view class="tool-btn {{currentTool === 'paint' ? 'is-active' : ''}}" data-tool="paint" bindtap="handleSwitchTool">画笔</view>
+    <view class="tool-btn {{currentTool === 'erase' ? 'is-active' : ''}}" data-tool="erase" bindtap="handleSwitchTool">橡皮</view>
+    <view class="tool-btn {{currentTool === 'pick' ? 'is-active' : ''}}" data-tool="pick" bindtap="handleSwitchTool">取色</view>
+    <view class="tool-btn {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">拖拽</view>
+  </view>
+
+  <view class="canvas-panel brand-panel">
+    <view class="canvas-stage" catchtouchmove="handleStageTouchMove">
+      <canvas
+        canvas-id="editorCanvas"
+        class="editor-canvas"
+        width="{{canvasWidth}}"
+        height="{{canvasHeight}}"
+        catchtouchstart="handleCanvasTouchStart"
+        catchtouchmove="handleCanvasTouchMove"
+        catchtouchend="handleCanvasTouchEnd"
+        catchtouchcancel="handleCanvasTouchEnd"
+      ></canvas>
+      <view wx:if="{{!hasEditableGrid}}" class="canvas-empty">
+        <text>暂未加载可编辑图纸</text>
+        <text class="canvas-empty-sub">请返回创作页重新生成后再试</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="zoom-row">
+    <button class="zoom-btn" data-action="out" bindtap="handleZoomTap">缩小</button>
+    <view class="scale-pill">{{scaleText}}</view>
+    <button class="zoom-btn" data-action="in" bindtap="handleZoomTap">放大</button>
+  </view>
+
+  <view class="action-row">
+    <button class="action-btn" bindtap="handleUndo">撤销</button>
+    <button class="action-btn" bindtap="handleRedo">重做</button>
+    <button class="action-btn" bindtap="handleResetView">居中</button>
+  </view>
+
+  <view class="palette-panel brand-panel">
+    <view class="palette-title">已用色</view>
+    <scroll-view class="used-scroll" scroll-x="true" enable-flex="true">
+      <view class="used-row">
+        <block wx:for="{{usedPalette}}" wx:key="index">
+          <view
+            class="color-chip {{selectedColorIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handlePickColor"
+          >
+            <view class="color-dot" style="background: {{item.hex}};"></view>
+            <text class="color-code">{{item.code}}</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+
+    <view class="palette-title full-title">MARD 全量色卡</view>
+    <scroll-view class="full-scroll" scroll-y="true" show-scrollbar="true">
+      <view class="full-grid">
+        <block wx:for="{{fullPalette}}" wx:key="index">
+          <view
+            class="full-item {{selectedColorIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handlePickColor"
+          >
+            <view class="full-dot" style="background: {{item.hex}};"></view>
+            <text class="full-code">{{item.code}}</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+  </view>
+
+  <canvas
+    canvas-id="exportCanvas"
+    width="{{exportCanvasSize}}"
+    height="{{exportCanvasSize}}"
+    style="position: fixed; left: -9999px; top: -9999px; width: {{exportCanvasSize}}px; height: {{exportCanvasSize}}px;"
+  ></canvas>
+</view>

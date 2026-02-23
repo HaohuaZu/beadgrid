@@ -23,50 +23,10 @@
         </div>
       </header>
 
-      <section class="showcase">
-        <p class="scenario-line">适合：宠物头像 / 情侣头像 / 二次元角色 / 像素风插画</p>
-        <div class="sample-grid">
-          <article class="sample-card">
-            <div class="sample-thumb sample-thumb-pet"></div>
-            <p class="sample-title">宠物头像</p>
-            <p class="sample-desc">毛发细节保留，适合做礼物款。</p>
-          </article>
-          <article class="sample-card">
-            <div class="sample-thumb sample-thumb-couple"></div>
-            <p class="sample-title">情侣合照</p>
-            <p class="sample-desc">自动压色后更好拼，效果稳定。</p>
-          </article>
-          <article class="sample-card">
-            <div class="sample-thumb sample-thumb-ip"></div>
-            <p class="sample-title">角色立绘</p>
-            <p class="sample-desc">边缘清晰，色号标注直观。</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="effect-showcase">
-        <div class="effect-header">
-          <h2>效果展示</h2>
-          <p>提示：拖动中间滑块对比；支持鼠标滚轮或双指缩放</p>
-        </div>
-        <div class="effect-compare">
-          <div id="effectCompareStage" class="effect-compare-stage" style="--compare-pos: 52%;">
-            <img class="effect-layer effect-layer-before" src="/assets/logoxiangsu.png" alt="拼豆图纸效果示例" />
-            <div class="effect-layer-after-wrap">
-              <img class="effect-layer effect-layer-after" src="/assets/logo.png" alt="原图示例" />
-            </div>
-            <div class="effect-badge effect-badge-before">原图</div>
-            <div class="effect-badge effect-badge-after">拼豆图纸效果</div>
-            <div class="effect-divider" aria-hidden="true"></div>
-          </div>
-          <div class="effect-compare-actions">
-            <button id="effectOpenOriginal" class="secondary" type="button">点开放大原图</button>
-            <button id="effectOpenResult" class="secondary" type="button">点开放大拼豆效果</button>
-          </div>
-        </div>
-      </section>
-      <section class="effect-cta">
-        <p>过年在家，如果还在纠结送什么礼物，不妨先上传一张你最喜欢的照片，看看拼豆像的效果。</p>
+      <section class="quick-links" aria-label="查看适合场景和效果展示">
+        <a id="openScenarioModal" class="text-link" href="#scenarioModal">适合场景</a>
+        <span class="quick-links-separator" aria-hidden="true">/</span>
+        <a id="openEffectShowcaseModal" class="text-link" href="#effectShowcaseModal">效果展示</a>
       </section>
 
       <main class="layout">
@@ -76,11 +36,6 @@
           <div class="panel-header">
             <h2>预览</h2>
             <p id="status">请先上传图片开始生成。</p>
-          </div>
-          <div class="preview-upload-guide">
-            <p>从相册里挑一张喜欢的照片，上传到这里裁成上半身或头像，几秒钟就能生成可拼图纸。买好对应色号的豆子，整个春节边聊天边拼，一幅拼豆像既是礼物，也是你们一起度过的新年回忆。</p>
-            <p>建议优先选择「单人或双人近景头像」，比如对象的大头照、爸妈的合照、你家宠物的特写——脸在画面里越大，拼出来就越清晰、越像。</p>
-            <p>小提示：特别远的多人合照（人很小那种），受拼豆尺寸和像素限制，细节会比较模糊，不太适合整张直接做。可以从合照里裁出某一个人或宠物的近景头像来做拼豆像，效果会好很多。</p>
           </div>
           <div class="preview-top-actions">
             <button id="previewReuploadTrigger" class="primary upload-trigger" type="button">上传图片 & 重新上传</button>
@@ -176,6 +131,12 @@
           </form>
 
           <p class="export-hint">用 MARD 221 固定色盘压色，并支持对应 Artkal M 2.6mm 等主流迷你拼豆色卡，方便按号买豆和数颗粒。</p>
+          <div id="wechatExportNotice" class="wechat-export-notice" hidden>
+            <p id="wechatExportNoticeText">检测到你正在微信内打开，导出文件可能被拦截。</p>
+            <div class="wechat-export-actions">
+              <button id="copyPageLinkButton" class="secondary" type="button">复制当前链接</button>
+            </div>
+          </div>
           <div class="actions">
             <button id="exportPng" class="primary upload-trigger export-action" disabled>导出 PNG</button>
             <button id="exportPdf" class="primary upload-trigger export-action" disabled>导出高清 PDF</button>
@@ -188,6 +149,68 @@
         <p>如果你在用这款生成器的过程中遇到任何问题（比如不知道选哪张照片、买哪些豆、怎么排版成礼物），可以加作者微信 <strong>Xuanlin8n</strong>，一对一帮你看图纸。</p>
         <p>也欢迎关注公众号和小红书『豆像工坊』，获取更多宠物头像、情侣头像的拼豆案例和免费模板。</p>
       </section>
+    </div>
+
+    <div id="scenarioModal" class="zoom-modal info-modal" hidden>
+      <div id="scenarioModalBackdrop" class="zoom-modal-backdrop"></div>
+      <div class="zoom-modal-card info-modal-card scenario-modal-card">
+        <div class="zoom-modal-header">
+          <h3>适合场景</h3>
+          <div class="zoom-modal-actions">
+            <button id="scenarioModalClose" class="secondary" type="button">关闭</button>
+          </div>
+        </div>
+        <div class="info-modal-body">
+          <p class="scenario-line">适合：宠物头像 / 情侣头像 / 二次元角色 / 像素风插画</p>
+          <div class="sample-grid">
+            <article class="sample-card">
+              <div class="sample-thumb sample-thumb-pet"></div>
+              <p class="sample-title">宠物头像</p>
+              <p class="sample-desc">毛发细节保留，适合做礼物款。</p>
+            </article>
+            <article class="sample-card">
+              <div class="sample-thumb sample-thumb-couple"></div>
+              <p class="sample-title">情侣合照</p>
+              <p class="sample-desc">自动压色后更好拼，效果稳定。</p>
+            </article>
+            <article class="sample-card">
+              <div class="sample-thumb sample-thumb-ip"></div>
+              <p class="sample-title">角色立绘</p>
+              <p class="sample-desc">边缘清晰，色号标注直观。</p>
+            </article>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="effectShowcaseModal" class="zoom-modal info-modal" hidden>
+      <div id="effectShowcaseModalBackdrop" class="zoom-modal-backdrop"></div>
+      <div class="zoom-modal-card info-modal-card effect-showcase-modal-card">
+        <div class="zoom-modal-header">
+          <h3>效果展示</h3>
+          <div class="zoom-modal-actions">
+            <button id="effectShowcaseModalClose" class="secondary" type="button">关闭</button>
+          </div>
+        </div>
+        <div class="info-modal-body">
+          <p class="effect-modal-tip">提示：拖动中间滑块对比；支持鼠标滚轮或双指缩放</p>
+          <div class="effect-compare">
+            <div id="effectCompareStage" class="effect-compare-stage" style="--compare-pos: 52%;">
+              <img class="effect-layer effect-layer-before" src="/assets/logoxiangsu.png" alt="拼豆图纸效果示例" />
+              <div class="effect-layer-after-wrap">
+                <img class="effect-layer effect-layer-after" src="/assets/logo.png" alt="原图示例" />
+              </div>
+              <div class="effect-badge effect-badge-before">原图</div>
+              <div class="effect-badge effect-badge-after">拼豆图纸效果</div>
+              <div class="effect-divider" aria-hidden="true"></div>
+            </div>
+            <div class="effect-compare-actions">
+              <button id="effectOpenOriginal" class="secondary" type="button">点开放大原图</button>
+              <button id="effectOpenResult" class="secondary" type="button">点开放大拼豆效果</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="zoomModal" class="zoom-modal" hidden>

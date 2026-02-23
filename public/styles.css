@@ -125,41 +125,30 @@ h1 {
   z-index: 1;
 }
 
-.showcase {
+.quick-links {
   margin-top: 18px;
-  padding: 16px 18px 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  box-shadow: 0 10px 24px rgba(65, 38, 0, 0.08);
-}
-
-.effect-showcase {
-  margin-top: 14px;
-  padding: 16px 18px 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  box-shadow: 0 10px 24px rgba(65, 38, 0, 0.08);
-}
-
-.effect-header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
 }
 
-.effect-header h2 {
-  margin: 0;
-  font-size: 20px;
+.text-link {
+  color: #5d4322;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  font-weight: 600;
 }
 
-.effect-header p {
-  margin: 0;
-  font-size: 13px;
-  color: #5b4b34;
+.text-link:hover,
+.text-link:focus-visible {
+  color: #8b4c08;
+}
+
+.quick-links-separator {
+  color: #8d7a5f;
+  font-size: 12px;
 }
 
 .effect-compare {
@@ -273,24 +262,10 @@ h1 {
   min-height: 42px;
 }
 
-.effect-cta {
-  margin-top: 10px;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: #fff5e5;
-  border: 1px solid #f0dcc0;
-}
-
-.effect-cta p {
+.effect-modal-tip {
   margin: 0;
-  font-size: 12px;
-  color: #67431c;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-.effect-cta p + p {
-  margin-top: 8px;
+  font-size: 13px;
+  color: #5b4b34;
 }
 
 .scenario-line {
@@ -593,6 +568,31 @@ button:disabled {
   margin: 2px 0 8px;
   color: #645843;
   font-size: 12px;
+}
+
+.wechat-export-notice {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #f3d5a4;
+  background: #fff5e8;
+}
+
+.wechat-export-notice p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #704818;
+}
+
+.wechat-export-actions {
+  margin-top: 8px;
+}
+
+.wechat-export-actions button {
+  min-height: 36px;
+  padding: 8px 12px;
+  border-radius: 10px;
 }
 
 .preview-panel {
@@ -907,6 +907,10 @@ button:disabled {
   display: none;
 }
 
+.info-modal {
+  z-index: 56;
+}
+
 .zoom-modal-backdrop {
   position: absolute;
   inset: 0;
@@ -925,6 +929,28 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.info-modal-card {
+  width: min(92vw, 980px);
+  height: min(86vh, 760px);
+}
+
+.scenario-modal-card {
+  width: min(92vw, 1040px);
+  height: min(82vh, 680px);
+}
+
+.effect-showcase-modal-card {
+  width: min(92vw, 1080px);
+  height: min(88vh, 860px);
+}
+
+.info-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .crop-modal-card {
@@ -1100,6 +1126,11 @@ button:disabled {
 }
 
 @media (max-width: 940px) {
+  .quick-links {
+    margin-top: 14px;
+    font-size: 13px;
+  }
+
   .sample-grid {
     grid-template-columns: 1fr;
   }
@@ -1110,12 +1141,6 @@ button:disabled {
 
   .layout {
     grid-template-columns: 1fr;
-  }
-
-  .effect-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
   }
 
   .effect-compare-stage {
@@ -1229,6 +1254,13 @@ button:disabled {
     height: 86vh;
   }
 
+  .info-modal-card,
+  .scenario-modal-card,
+  .effect-showcase-modal-card {
+    width: 94vw;
+    height: 84vh;
+  }
+
   .zoom-modal-header {
     align-items: flex-start;
     gap: 10px;
@@ -1259,21 +1291,17 @@ button:disabled {
 }
 
 @media (max-width: 520px) {
-  .effect-showcase {
-    padding: 14px 12px 14px;
-  }
-
-  .effect-cta {
-    padding: 10px 12px;
-  }
-
-  .effect-header h2 {
-    font-size: 18px;
+  .info-modal-body {
+    padding-right: 0;
   }
 
   .effect-compare-stage {
     height: min(72vw, 300px);
     min-height: 196px;
+  }
+
+  .effect-modal-tip {
+    font-size: 12px;
   }
 
   .effect-badge {

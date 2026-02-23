@@ -1,0 +1,60 @@
+<view class="page profile-page">
+  <view class="summary-card brand-panel">
+    <view class="summary-main">
+      <view class="avatar">豆</view>
+      <view class="summary-meta">
+        <view class="name-row">
+          <text class="nickname">{{nickname}}</text>
+          <text class="bean-text">豆币:{{coinBalance}}</text>
+        </view>
+        <view class="reuse-text">作品总复用：{{statClones}} 次</view>
+      </view>
+    </view>
+    <view class="quick-row">
+      <view class="quick-item" wx:for="{{quickEntries}}" wx:key="key" data-key="{{item.key}}" bindtap="handleQuickTap">
+        <view class="quick-icon">{{item.icon}}</view>
+        <text>{{item.title}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="account-card brand-panel">
+    <view class="account-row">
+      <text class="account-label">账号ID：</text>
+      <text class="account-value">{{accountId}}</text>
+      <button class="copy-btn" bindtap="handleCopyAccount">复制</button>
+    </view>
+    <view class="account-row">
+      <text class="account-label">豆币余额：</text>
+      <text class="account-value">{{coinBalance}}拼豆币</text>
+    </view>
+  </view>
+
+  <view class="stats-card brand-panel">
+    <view class="stat-item">
+      <text class="stat-value">{{statWorks}}</text>
+      <text class="stat-label">完成作品</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-value">{{statLikes}}</text>
+      <text class="stat-label">获赞</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-value">{{statSaves}}</text>
+      <text class="stat-label">被收藏</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-value">{{statClones}}</text>
+      <text class="stat-label">复用</text>
+    </view>
+  </view>
+
+  <view class="menu-card brand-panel">
+    <view class="menu-item" wx:for="{{menuEntries}}" wx:key="key" data-key="{{item.key}}" bindtap="handleMenuTap">
+      <text>{{item.title}}</text>
+      <text class="arrow">›</text>
+    </view>
+  </view>
+
+  <button class="contact-btn" bindtap="handleContactService">联系客服</button>
+</view>

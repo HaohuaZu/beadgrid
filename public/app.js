@@ -32,6 +32,14 @@ const effectCompareStage = document.getElementById("effectCompareStage");
 const effectDivider = document.querySelector(".effect-divider");
 const effectOpenOriginalButton = document.getElementById("effectOpenOriginal");
 const effectOpenResultButton = document.getElementById("effectOpenResult");
+const openScenarioModalLink = document.getElementById("openScenarioModal");
+const openEffectShowcaseModalLink = document.getElementById("openEffectShowcaseModal");
+const scenarioModal = document.getElementById("scenarioModal");
+const scenarioModalBackdrop = document.getElementById("scenarioModalBackdrop");
+const scenarioModalClose = document.getElementById("scenarioModalClose");
+const effectShowcaseModal = document.getElementById("effectShowcaseModal");
+const effectShowcaseModalBackdrop = document.getElementById("effectShowcaseModalBackdrop");
+const effectShowcaseModalClose = document.getElementById("effectShowcaseModalClose");
 const effectModal = document.getElementById("effectModal");
 const effectModalBackdrop = document.getElementById("effectModalBackdrop");
 const effectModalClose = document.getElementById("effectModalClose");
@@ -54,6 +62,9 @@ const statusEl = document.getElementById("status");
 const usageStatusEl = document.getElementById("usageStatus");
 const exportPngButton = document.getElementById("exportPng");
 const exportPdfButton = document.getElementById("exportPdf");
+const wechatExportNoticeEl = document.getElementById("wechatExportNotice");
+const wechatExportNoticeTextEl = document.getElementById("wechatExportNoticeText");
+const copyPageLinkButton = document.getElementById("copyPageLinkButton");
 
 const GRID_SIZES = [52, 104];
 const DEFAULT_GRID_SIZE = GRID_SIZES[0];
@@ -66,6 +77,9 @@ const FIXED_MAX_COLORS = "12";
 const PNG_EXPORT_TARGET_CELL_SIZE = 36;
 const PNG_EXPORT_MIN_SIZE = 3200;
 const PNG_EXPORT_MAX_SIZE = 5200;
+const USER_AGENT = (navigator.userAgent || "").toLowerCase();
+const IS_WECHAT_BROWSER = /micromessenger/.test(USER_AGENT);
+const IS_IOS_DEVICE = /iphone|ipad|ipod/.test(USER_AGENT);
 
 const CROP_MIN_SIZE = 48;
 const CROP_HANDLE_SIZE = 10;
@@ -138,6 +152,45 @@ function setStatus(message) {
 function setButtons(enabled) {
   exportPngButton.disabled = !enabled;
   exportPdfButton.disabled = !enabled;
+}
+
+function getWechatOpenGuide() {
+  if (IS_IOS_DEVICE) {
+    return "请点右上角“...”并选择“在Safari中打开”，再导出 PNG/PDF。";
+  }
+  return "请点右上角“...”并选择“在浏览器打开”，再导出 PNG/PDF。";
+}
+
+function updateWechatNoticeVisibility() {
+  if (!wechatExportNoticeEl) return;
+  wechatExportNoticeEl.hidden = !IS_WECHAT_BROWSER;
+  if (!IS_WECHAT_BROWSER || !wechatExportNoticeTextEl) return;
+  wechatExportNoticeTextEl.textContent = `检测到你正在微信内打开，导出文件可能被拦截。${getWechatOpenGuide()}`;
+}
+
+async function copyCurrentPageLink() {
+  const url = window.location.href;
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    await navigator.clipboard.writeText(url);
+    return;
+  }
+
+  const tempInput = document.createElement("textarea");
+  tempInput.value = url;
+  tempInput.setAttribute("readonly", "readonly");
+  tempInput.style.position = "fixed";
+  tempInput.style.left = "-9999px";
+  document.body.appendChild(tempInput);
+  tempInput.select();
+  document.execCommand("copy");
+  tempInput.remove();
+}
+
+function blockExportInWechat() {
+  if (!IS_WECHAT_BROWSER) return false;
+  setStatus(`微信内置浏览器通常会拦截下载。${getWechatOpenGuide()}`);
+  if (wechatExportNoticeEl) wechatExportNoticeEl.hidden = false;
+  return true;
 }
 
 function downloadBlob(blob, filename) {
@@ -319,6 +372,30 @@ function closeEffectModal() {
   syncBodyModalState();
 }
 
+function openScenarioModalPanel() {
+  if (!scenarioModal) return;
+  scenarioModal.hidden = false;
+  syncBodyModalState();
+}
+
+function closeScenarioModalPanel() {
+  if (!scenarioModal || scenarioModal.hidden) return;
+  scenarioModal.hidden = true;
+  syncBodyModalState();
+}
+
+function openEffectShowcaseModalPanel() {
+  if (!effectShowcaseModal) return;
+  effectShowcaseModal.hidden = false;
+  syncBodyModalState();
+}
+
+function closeEffectShowcaseModalPanel() {
+  if (!effectShowcaseModal || effectShowcaseModal.hidden) return;
+  effectShowcaseModal.hidden = true;
+  syncBodyModalState();
+}
+
 function getUltraPngSize(gridSize) {
   const preferred = Math.round(gridSize * PNG_EXPORT_TARGET_CELL_SIZE + 180);
   return clamp(preferred, PNG_EXPORT_MIN_SIZE, PNG_EXPORT_MAX_SIZE);
@@ -339,7 +416,11 @@ function hasCodeData() {
 
 function syncBodyModalState() {
   const isAnyModalOpen =
-    !zoomModal.hidden || !cropModal.hidden || (effectModal && !effectModal.hidden);
+    !zoomModal.hidden
+    || !cropModal.hidden
+    || (scenarioModal && !scenarioModal.hidden)
+    || (effectShowcaseModal && !effectShowcaseModal.hidden)
+    || (effectModal && !effectModal.hidden);
   document.body.classList.toggle("modal-open", isAnyModalOpen);
 }
 
@@ -1845,12 +1926,61 @@ if (previewReuploadTriggerButton) {
   });
 }
 
+if (copyPageLinkButton) {
+  copyPageLinkButton.addEventListener("click", async () => {
+    try {
+      await copyCurrentPageLink();
+      setStatus("链接已复制。请在系统浏览器粘贴打开后再导出。");
+    } catch (_error) {
+      setStatus("复制失败，请手动复制当前网址并在系统浏览器打开。");
+    }
+  });
+}
+
 if (previewEmptyState) {
   previewEmptyState.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
   });
   previewEmptyState.addEventListener("click", () => {
     openImagePicker();
+  });
+}
+
+if (openScenarioModalLink) {
+  openScenarioModalLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    openScenarioModalPanel();
+  });
+}
+
+if (openEffectShowcaseModalLink) {
+  openEffectShowcaseModalLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    openEffectShowcaseModalPanel();
+  });
+}
+
+if (scenarioModalBackdrop) {
+  scenarioModalBackdrop.addEventListener("click", () => {
+    closeScenarioModalPanel();
+  });
+}
+
+if (scenarioModalClose) {
+  scenarioModalClose.addEventListener("click", () => {
+    closeScenarioModalPanel();
+  });
+}
+
+if (effectShowcaseModalBackdrop) {
+  effectShowcaseModalBackdrop.addEventListener("click", () => {
+    closeEffectShowcaseModalPanel();
+  });
+}
+
+if (effectShowcaseModalClose) {
+  effectShowcaseModalClose.addEventListener("click", () => {
+    closeEffectShowcaseModalPanel();
   });
 }
 
@@ -2021,6 +2151,7 @@ imageInput.addEventListener("change", async () => {
 
 exportPngButton.addEventListener("click", () => {
   if (!state.grid) return;
+  if (blockExportInWechat()) return;
   setStatus("正在准备超清 PNG...");
 
   const exportSize = getUltraPngSize(state.grid.length);
@@ -2051,6 +2182,7 @@ exportPngButton.addEventListener("click", () => {
 
 exportPdfButton.addEventListener("click", async () => {
   if (!state.grid) return;
+  if (blockExportInWechat()) return;
 
   try {
     setStatus("正在准备高清 PDF...");
@@ -2194,6 +2326,14 @@ window.addEventListener("keydown", (event) => {
       closeEffectModal();
       return;
     }
+    if (effectShowcaseModal && !effectShowcaseModal.hidden) {
+      closeEffectShowcaseModalPanel();
+      return;
+    }
+    if (scenarioModal && !scenarioModal.hidden) {
+      closeScenarioModalPanel();
+      return;
+    }
     if (!cropModal.hidden) {
       closeCropModal();
       setStatus("已取消裁剪。准备好后可重新选择图片。");
@@ -2208,6 +2348,7 @@ loadPalettes();
 updateUploadFilename();
 updatePreviewEmptyState();
 refreshColorUsageStatus();
+updateWechatNoticeVisibility();
 setButtons(false);
 setStatus("请选择一张照片，放大并裁成上半身或头像，完成裁剪后系统会自动生成拼豆图纸。");
 patternZoom.setContent(patternCanvas, patternCanvas.width, patternCanvas.height);

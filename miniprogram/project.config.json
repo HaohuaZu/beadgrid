@@ -1,0 +1,21 @@
+{
+  "description": "豆像工坊小程序UI骨架",
+  "packOptions": {
+    "ignore": []
+  },
+  "setting": {
+    "bundle": false,
+    "userConfirmedBundleSwitch": false,
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": false
+  },
+  "compileType": "miniprogram",
+  "libVersion": "2.33.0",
+  "appid": "wxdff2fb2346b4402b",
+  "projectname": "douxiang-workshop-mini",
+  "miniprogramRoot": "./",
+  "condition": {}
+}

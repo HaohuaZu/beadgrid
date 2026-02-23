@@ -1,0 +1,249 @@
+<view class="page my-page">
+  <view class="works-list">
+    <block wx:for="{{displayWorks}}" wx:key="id">
+      <view class="work-card brand-panel">
+        <view class="work-title-row">
+          <text class="work-title">{{item.title}}</text>
+          <text class="work-status {{item.isGenerating ? 'is-generating' : ''}} {{item.isFailed ? 'is-failed' : ''}}">{{item.status}}</text>
+        </view>
+
+        <view class="preview-row">
+          <view
+            class="preview-block preview-tone-{{item.previewTones.origin}}"
+            data-work-id="{{item.id}}"
+            data-view-type="origin"
+            bindtap="handleOpenWorkPreview"
+          >
+            <image
+              wx:if="{{item.previewImages.origin}}"
+              class="preview-image"
+              src="{{item.previewImages.origin}}"
+              mode="aspectFill"
+            ></image>
+            <view wx:else class="preview-placeholder">原图</view>
+            <view class="preview-label">原图</view>
+          </view>
+          <view
+            class="preview-block preview-tone-{{item.previewTones.ai}}"
+            data-work-id="{{item.id}}"
+            data-view-type="ai"
+            bindtap="handleOpenWorkPreview"
+          >
+            <image
+              wx:if="{{item.previewImages.ai}}"
+              class="preview-image"
+              src="{{item.previewImages.ai}}"
+              mode="aspectFill"
+            ></image>
+            <view wx:elif="{{item.isGenerating}}" class="preview-generating">
+              <text class="preview-generating-icon">⌛</text>
+              <text class="preview-generating-title">AI图纸生成中</text>
+              <text class="preview-generating-sub">约30秒至1分钟，请稍候</text>
+            </view>
+            <view wx:else class="preview-placeholder">AI图</view>
+            <view class="preview-label">AI图</view>
+          </view>
+          <view
+            class="preview-block preview-tone-{{item.previewTones.grid}}"
+            data-work-id="{{item.id}}"
+            data-view-type="grid"
+            bindtap="handleOpenWorkPreview"
+          >
+            <image
+              wx:if="{{item.previewImages.grid}}"
+              class="preview-image"
+              src="{{item.previewImages.grid}}"
+              mode="aspectFill"
+            ></image>
+            <view wx:elif="{{item.isGenerating}}" class="preview-generating">
+              <text class="preview-generating-icon">⌛</text>
+              <text class="preview-generating-title">AI图纸生成中</text>
+              <text class="preview-generating-sub">约1至2分钟，请稍候</text>
+            </view>
+            <view wx:else class="preview-placeholder">图纸</view>
+            <view class="preview-label">图纸</view>
+          </view>
+        </view>
+
+        <view class="work-meta">{{item.size}} · {{item.style}}</view>
+        <view class="work-stats">
+          <text>浏览 {{item.views}}</text>
+          <text>收藏 {{item.saves}}</text>
+          <text>复用 {{item.clones}}</text>
+          <text wx:if="{{item.beadEstimate}}">豆量 {{item.beadEstimate.total}}</text>
+          <text wx:if="{{item.beadEstimate}}">色数 {{item.beadEstimate.colorUsed}}</text>
+        </view>
+        <view class="work-footer">
+          <text class="work-date">{{item.date}}</text>
+          <view class="work-footer-actions">
+            <button
+              class="footer-sheet-btn"
+              data-id="{{item.id}}"
+              bindtap="handleOpenColorSheet"
+              disabled="{{item.isGenerating}}"
+            >
+              <view class="footer-sheet-icon"></view>
+              <text class="footer-sheet-text">色号图纸</text>
+            </button>
+            <button
+              class="footer-delete-btn"
+              data-id="{{item.id}}"
+              bindtap="handleDeleteWork"
+              disabled="{{item.isGenerating}}"
+            >
+              <view class="footer-delete-icon"></view>
+            </button>
+          </view>
+        </view>
+      </view>
+    </block>
+  </view>
+
+  <view class="fab" bindtap="handleFabTap">+</view>
+
+  <view class="overlay preview-overlay" wx:if="{{showWorkPreviewModal}}" bindtap="handleCloseWorkPreview">
+    <view class="preview-modal brand-panel" catchtap="noop">
+      <view class="preview-modal-head">
+        <text class="preview-modal-title">{{previewWorkTitle}}</text>
+        <text class="modal-close" bindtap="handleCloseWorkPreview">×</text>
+      </view>
+      <view class="preview-modal-label">{{previewLabel}}</view>
+      <image wx:if="{{previewImagePath}}" class="preview-large-image" src="{{previewImagePath}}" mode="aspectFit"></image>
+      <view wx:else class="preview-large preview-tone-{{previewTone}}"></view>
+    </view>
+  </view>
+
+  <view class="overlay" wx:if="{{showUploadModal}}" bindtap="handleOverlayTap">
+    <view class="modal-card upload-modal" wx:if="{{showUploadModal}}" catchtap="noop">
+      <view class="upload-modal-head">
+        <text class="upload-modal-title">AI生成拼豆图纸</text>
+        <text class="modal-close" bindtap="handleCloseModal">×</text>
+      </view>
+      <view class="upload-divider"></view>
+      <scroll-view class="upload-scroll" scroll-y="true" show-scrollbar="true">
+        <view class="upload-scroll-inner">
+          <view class="upload-drop" bindtap="handleUploadAreaTap">
+            <block wx:if="{{uploadImagePath}}">
+              <block wx:if="{{!uploadPreviewError}}">
+                <image class="upload-preview" src="{{uploadImagePath}}" mode="aspectFit" catchtap="handlePreviewUploadedImage" binderror="handleUploadPreviewError"></image>
+              </block>
+              <view class="upload-preview-fallback" wx:else>
+                <text>已选择图片</text>
+                <text class="upload-fallback-name">{{uploadImageName}}</text>
+              </view>
+              <view class="upload-file-meta">
+                <text class="upload-file-name">{{uploadImageName}}</text>
+                <text class="upload-file-size" wx:if="{{uploadImageSizeText}}">{{uploadImageSizeText}}</text>
+              </view>
+            </block>
+            <block wx:else>
+              <view class="robot">🤖</view>
+              <view class="upload-title">上传图片AI转拼豆图纸</view>
+              <view class="upload-subtitle">支持 JPG、PNG 格式</view>
+            </block>
+          </view>
+
+          <view class="warn-box">
+            <text>为避免浪费拼豆币，温馨提示：</text>
+            <text>1. 优先上传近景人像或宠物头像，效果更好。</text>
+            <text>2. 远景多人图可先裁剪后再上传。</text>
+          </view>
+
+          <view class="setting-block">
+            <view class="setting-title">转换花费</view>
+            <view class="seg-row">
+              <view
+                class="seg-item {{selectedCostMode === 'standard' ? 'is-active' : ''}}"
+                data-mode="standard"
+                bindtap="handleSelectCostMode"
+              >标准（1拼豆币）</view>
+              <view
+                class="seg-item {{selectedCostMode === 'mini' ? 'is-active' : ''}}"
+                data-mode="mini"
+                bindtap="handleSelectCostMode"
+              >mini（免费）</view>
+            </view>
+            <view class="setting-note">{{costHintText}}</view>
+          </view>
+
+          <view class="setting-block">
+            <view class="setting-title">图片风格</view>
+            <view class="seg-row">
+              <view
+                class="seg-item {{selectedStyleMode === 'cartoon' ? 'is-active' : ''}}"
+                data-mode="cartoon"
+                bindtap="handleSelectStyleMode"
+              >卡通像素</view>
+              <view
+                class="seg-item {{selectedStyleMode === 'fine' ? 'is-active' : ''}}"
+                data-mode="fine"
+                bindtap="handleSelectStyleMode"
+              >精致像素</view>
+            </view>
+            <view class="setting-note">{{styleHintText}}</view>
+            <view class="setting-mini-note">当前版本中，卡通像素与精致像素都会先按精致像素输出。</view>
+          </view>
+
+          <view class="setting-block">
+            <view class="setting-title">尺寸选择</view>
+            <view class="seg-row">
+              <view
+                class="seg-item {{selectedSizeMode === 'auto' ? 'is-active' : ''}}"
+                data-mode="auto"
+                bindtap="handleSelectSizeMode"
+              >自动</view>
+              <view
+                class="seg-item {{selectedSizeMode === 'small' ? 'is-active' : ''}}"
+                data-mode="small"
+                bindtap="handleSelectSizeMode"
+              >小</view>
+            </view>
+            <view class="setting-note">自动会按图片比例推荐网格；小尺寸更省时，适合快速预览。</view>
+          </view>
+
+          <button
+            class="start-convert-btn"
+            bindtap="handleStartAiConvert"
+            disabled="{{isConverting}}"
+            loading="{{isConverting}}"
+          >{{isConverting ? 'AI转换中...' : '开始AI转换'}}</button>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+
+  <view class="overlay naming-overlay" wx:if="{{showNamingModal}}" bindtap="handleCloseNamingModal">
+    <view class="modal-card naming-modal" catchtap="noop">
+      <view class="naming-title">给作品取个名字</view>
+      <view class="naming-tip">建议修改名称便于管理，发布到社区后也更容易被搜索到。</view>
+      <input
+        class="naming-input"
+        type="text"
+        maxlength="20"
+        placeholder="请输入2-20字作品名"
+        value="{{namingDraft}}"
+        bindinput="handleNamingDraftInput"
+        bindconfirm="handleConfirmNaming"
+        focus
+      />
+      <view class="naming-error" wx:if="{{namingError}}">{{namingError}}</view>
+      <view class="naming-actions">
+        <button class="naming-btn cancel" bindtap="handleCloseNamingModal">返回修改</button>
+        <button class="naming-btn confirm" bindtap="handleConfirmNaming">确认并开始转换</button>
+      </view>
+    </view>
+  </view>
+
+  <canvas
+    canvas-id="processCanvas"
+    width="{{processCanvasSize}}"
+    height="{{processCanvasSize}}"
+    style="position: fixed; left: -9999px; top: -9999px; width: {{processCanvasSize}}px; height: {{processCanvasSize}}px;"
+  ></canvas>
+  <canvas
+    canvas-id="renderCanvas"
+    width="{{renderCanvasSize}}"
+    height="{{renderCanvasSize}}"
+    style="position: fixed; left: -9999px; top: -9999px; width: {{renderCanvasSize}}px; height: {{renderCanvasSize}}px;"
+  ></canvas>
+</view>

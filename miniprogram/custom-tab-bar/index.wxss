@@ -1,0 +1,109 @@
+.tabbar-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #ffffff;
+  border-top: 1rpx solid #e6eaf0;
+}
+
+.tabbar-inner {
+  height: 104rpx;
+  display: flex;
+  align-items: stretch;
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8rpx;
+  color: #98a2b3;
+  position: relative;
+}
+
+.tab-item.is-active {
+  color: #ff3b5c;
+}
+
+.tab-item.is-active::after {
+  content: "";
+  position: absolute;
+  bottom: 8rpx;
+  width: 8rpx;
+  height: 8rpx;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tab-icon {
+  width: 42rpx;
+  height: 42rpx;
+  position: relative;
+}
+
+.tab-text {
+  font-size: 20rpx;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: 1rpx;
+}
+
+.tab-icon::before,
+.tab-icon::after {
+  content: "";
+  position: absolute;
+  border: 3rpx solid currentColor;
+}
+
+.icon-home::before {
+  left: 8rpx;
+  right: 8rpx;
+  top: 3rpx;
+  height: 14rpx;
+  border-radius: 999rpx;
+}
+
+.icon-home::after {
+  left: 8rpx;
+  right: 8rpx;
+  bottom: 3rpx;
+  height: 14rpx;
+  border-radius: 999rpx;
+}
+
+.icon-create::before {
+  left: 11rpx;
+  right: 11rpx;
+  top: 5rpx;
+  height: 13rpx;
+  border-radius: 999rpx;
+}
+
+.icon-create::after {
+  left: 7rpx;
+  right: 7rpx;
+  bottom: 4rpx;
+  height: 17rpx;
+  border-radius: 10rpx;
+}
+
+.icon-profile::before {
+  left: 11rpx;
+  right: 11rpx;
+  top: 4rpx;
+  height: 13rpx;
+  border-radius: 999rpx;
+}
+
+.icon-profile::after {
+  left: 8rpx;
+  right: 8rpx;
+  bottom: 3rpx;
+  height: 15rpx;
+  border-radius: 10rpx 10rpx 12rpx 12rpx;
+}

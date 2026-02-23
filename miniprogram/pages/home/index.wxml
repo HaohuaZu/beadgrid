@@ -1,0 +1,114 @@
+<view class="home-page">
+  <view class="top-nav brand-panel">
+    <view class="main-nav-row">
+      <scroll-view class="main-nav-scroll" scroll-x="true" show-scrollbar="false">
+        <view class="main-nav-list">
+          <block wx:for="{{mainNavs}}" wx:key="id">
+            <view
+              class="main-nav-item {{activeMainNav === item.id ? 'is-active' : ''}}"
+              data-id="{{item.id}}"
+              bindtap="handleMainNavTap"
+            >
+              {{item.label}}
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+      <view class="search-entry" bindtap="handleOpenSearchPanel">🔍</view>
+    </view>
+
+    <view class="sort-row">
+      <scroll-view class="sort-scroll" scroll-x="true" show-scrollbar="false">
+        <view class="sort-list">
+          <block wx:for="{{sortNavs}}" wx:key="id">
+            <view
+              class="sort-item {{activeSortNav === item.id ? 'is-active' : ''}}"
+              data-id="{{item.id}}"
+              bindtap="handleSortNavTap"
+            >
+              {{item.label}}
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+      <view class="sort-filter-icon" bindtap="handleOpenFilterHint">⚲</view>
+    </view>
+
+    <view class="tag-row">
+      <scroll-view class="tag-scroll" scroll-x="true" show-scrollbar="false">
+        <view class="tag-list">
+          <block wx:for="{{activeTagOptions}}" wx:key="*this">
+            <view
+              class="tag-chip {{activeTag === item ? 'is-active' : ''}}"
+              data-tag="{{item}}"
+              bindtap="handleTagTap"
+            >
+              {{item}}
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view class="search-state" wx:if="{{searchKeyword}}">
+      <text>关键词：{{searchKeyword}}</text>
+      <text class="clear-link" bindtap="handleClearSearch">清除</text>
+    </view>
+  </view>
+
+  <view class="paper-grid">
+    <block wx:for="{{displayPapers}}" wx:key="id">
+      <view class="paper-card brand-panel">
+        <view class="paper-cover tone-{{item.tone}}" data-id="{{item.id}}" bindtap="handlePreviewPaper">
+          <text class="hot-tag" wx:if="{{item.hot}}">热门</text>
+          <view class="paper-pixel">
+            <text class="paper-pixel-text">{{item.theme}}</text>
+          </view>
+        </view>
+
+        <view class="paper-title">{{item.title}}</view>
+        <view class="paper-author-row">
+          <view class="author-avatar">{{item.avatarText}}</view>
+          <text class="author-name">{{item.author}}</text>
+          <text class="paper-size">{{item.size}}</text>
+        </view>
+
+        <view class="paper-meta-row">
+          <text class="meta-tag">{{item.scene}}</text>
+          <text class="meta-tag">{{item.difficulty}}</text>
+        </view>
+
+        <view class="paper-action-row">
+          <view class="mini-btn metric-btn">♡ {{item.likes}}</view>
+          <view class="mini-btn metric-btn">☆ {{item.favorites}}</view>
+          <view class="mini-btn export-btn" data-id="{{item.id}}" bindtap="handleExportPaper">⬇</view>
+          <view class="mini-btn edit-btn" data-id="{{item.id}}" bindtap="handleEditPaper">✎</view>
+        </view>
+      </view>
+    </block>
+  </view>
+
+  <view class="empty-block" wx:if="{{!displayPapers.length}}">
+    暂无匹配图纸，试试切换筛选条件
+  </view>
+
+  <button class="generate-btn" bindtap="handleGenerate">AI生成图纸</button>
+
+  <view class="overlay" wx:if="{{showSearchPanel}}" bindtap="handleCloseSearchPanel">
+    <view class="search-modal brand-panel" catchtap="noop">
+      <view class="search-modal-title">搜索图纸</view>
+      <view class="search-modal-row">
+        <input
+          class="search-modal-input"
+          placeholder="输入图案、场景或作者"
+          value="{{searchDraft}}"
+          bindinput="handleSearchDraftInput"
+          confirm-type="search"
+          bindconfirm="handleSearchConfirm"
+          focus
+        />
+        <view class="search-modal-btn" bindtap="handleSearchConfirm">搜索</view>
+      </view>
+    </view>
+  </view>
+</view>

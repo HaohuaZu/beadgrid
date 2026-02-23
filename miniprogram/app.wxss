@@ -1,0 +1,23 @@
+page {
+  background: #f7f8fa;
+  color: #1f2430;
+  font-size: 28rpx;
+  line-height: 1.45;
+}
+
+.brand-panel {
+  background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+  border: 1rpx solid #e6eaf0;
+  border-radius: 18rpx 30rpx 18rpx 30rpx;
+  box-shadow: 0 10rpx 26rpx rgba(15, 23, 42, 0.06);
+}
+
+.brand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16rpx;
+  background: linear-gradient(135deg, #ff3b5c, #e53150);
+  color: #ffffff;
+  font-weight: 600;
+}
