@@ -10,6 +10,15 @@ const MIN_SCALE = 0.5;
 const MAX_SCALE = 4;
 const MAX_CANVAS_EDGE = 960;
 const EDITOR_DATA_SCHEMA_VERSION = 3;
+const EDITOR_HINT_KEY = "bead_editor_gesture_hint_v1";
+const TOOL_LABELS = {
+  paint: "画笔",
+  erase: "橡皮",
+  pick: "取色",
+  move: "拖拽",
+  moveShape: "移动图案",
+  bucket: "油漆桶"
+};
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -56,8 +65,12 @@ Page({
     workId: "",
     workName: "未命名图纸",
     gridSizeText: "--",
+    viewMode: "edit",
     currentTool: "paint",
     scaleText: "100%",
+    scalePercent: 100,
+    scaleInputValue: "100",
+    showScaleOverlay: false,
     hasEditableGrid: false,
     canvasWidth: 900,
     canvasHeight: 900,
@@ -65,6 +78,21 @@ Page({
     selectedColorIndex: 0,
     selectedColorCode: "A1",
     selectedColorHex: "#FFF6D4",
+    currentToolLabel: "画笔",
+    eraserMode: "normal",
+    showEraserMenu: false,
+    showGridLines: true,
+    showLocatorLines: true,
+    showColorCodeInEdit: false,
+    autoSaveEnabled: true,
+    showColorPicker: false,
+    beadHighlightIndex: -1,
+    beadStats: [],
+    canUndo: false,
+    canRedo: false,
+    historyText: "0 / 0",
+    showMoveShapeOverlay: false,
+    moveShapeDeltaText: "Δx 0 · Δy 0",
     usedPalette: [],
     fullPalette: []
   },
@@ -104,10 +132,17 @@ Page({
     this.canvasReady = false;
     this.persistTimer = null;
     this.redrawTimer = null;
+    this.wheelSettleTimer = null;
+    this.scaleOverlayTimer = null;
     this.lightDrawRequested = false;
     this.backgroundIndexSet = Object.create(null);
     this.hasManualEdits = false;
     this.interactionMode = "";
+    this.moveTipShown = false;
+    this.moveShapeTipShown = false;
+    this.lastScaleUiSyncAt = 0;
+    this.beadCellLabels = [];
+    this.wheelHintShown = false;
 
     this.setData({
       workId,
@@ -115,13 +150,36 @@ Page({
       fullPalette: this.palette,
       selectedColorIndex: 0,
       selectedColorCode: this.palette[0].code,
-      selectedColorHex: this.palette[0].hex
+      selectedColorHex: this.palette[0].hex,
+      viewMode: "edit",
+      currentToolLabel: TOOL_LABELS.paint,
+      eraserMode: "normal",
+      showEraserMenu: false,
+      showGridLines: true,
+      showLocatorLines: true,
+      showColorCodeInEdit: false,
+      autoSaveEnabled: true,
+      scalePercent: 100,
+      scaleInputValue: "100",
+      showScaleOverlay: false,
+      showColorPicker: false,
+      beadHighlightIndex: -1,
+      beadStats: [],
+      canUndo: false,
+      canRedo: false,
+      historyText: "0 / 0",
+      showMoveShapeOverlay: false,
+      moveShapeDeltaText: "Δx 0 · Δy 0"
     });
 
     this.loadWork(workId);
   },
   onReady() {
     this.measureCanvas();
+    this.maybeShowEditorHint();
+  },
+  onPageScroll(event) {
+    this.pageScrollTop = toNumber(event && event.scrollTop, this.pageScrollTop || 0);
   },
   onUnload() {
     if (this.persistTimer) {
@@ -132,12 +190,303 @@ Page({
       clearTimeout(this.redrawTimer);
       this.redrawTimer = null;
     }
+    if (this.wheelSettleTimer) {
+      clearTimeout(this.wheelSettleTimer);
+      this.wheelSettleTimer = null;
+    }
+    if (this.scaleOverlayTimer) {
+      clearTimeout(this.scaleOverlayTimer);
+      this.scaleOverlayTimer = null;
+    }
+    this.pageScrollTop = 0;
     this.persistEditedWork();
   },
   setDataAsync(payload) {
     return new Promise((resolve) => {
       this.setData(payload, resolve);
     });
+  },
+  maybeShowEditorHint() {
+    try {
+      const hasShown = Boolean(wx.getStorageSync(EDITOR_HINT_KEY));
+      if (hasShown) return;
+      wx.setStorageSync(EDITOR_HINT_KEY, true);
+      wx.showToast({
+        title: "提示：双指缩放，切换“拖拽”可平移画布",
+        icon: "none",
+        duration: 2200
+      });
+    } catch (error) {
+      // ignore hint storage errors
+    }
+  },
+  syncHistoryState() {
+    const undoCount = this.undoStack.length;
+    const redoCount = this.redoStack.length;
+    this.setData({
+      canUndo: undoCount > 0,
+      canRedo: redoCount > 0,
+      historyText: `${undoCount} / ${redoCount}`
+    });
+  },
+  getToolLabel(tool, eraserMode = this.data.eraserMode) {
+    if (tool === "erase") {
+      return eraserMode === "flood" ? "大橡皮" : "橡皮";
+    }
+    return TOOL_LABELS[tool] || "画笔";
+  },
+  closeEraserMenu() {
+    if (this.data.showEraserMenu) {
+      this.setData({ showEraserMenu: false });
+    }
+  },
+  handleOpenColorPicker() {
+    if (!this.data.hasEditableGrid) return;
+    this.closeEraserMenu();
+    this.setData({ showColorPicker: true });
+  },
+  handleCloseColorPicker() {
+    if (this.data.showColorPicker) {
+      this.setData({ showColorPicker: false });
+    }
+  },
+  noop() {},
+  handleSwitchViewMode(event) {
+    const mode = event.currentTarget.dataset.mode === "bead" ? "bead" : "edit";
+    if (mode === this.data.viewMode) return;
+    this.closeEraserMenu();
+    if (mode === "bead") {
+      this.refreshBeadMetrics();
+      wx.showToast({
+        title: "拼豆模式：点击色块可高亮，横向连续显示计数",
+        icon: "none",
+        duration: 2200
+      });
+    }
+    this.setData({
+      viewMode: mode,
+      showMoveShapeOverlay: false
+    }, () => {
+      this.requestRedraw(false);
+    });
+  },
+  toggleBeadHighlight(index) {
+    if (!Number.isFinite(index) || index < 0) return;
+    const next = this.data.beadHighlightIndex === index ? -1 : index;
+    this.setData({ beadHighlightIndex: next }, () => {
+      this.requestRedraw(true);
+    });
+  },
+  handleSelectBeadColor(event) {
+    const index = toNumber(event.currentTarget.dataset.index, -1);
+    if (index < 0) return;
+    this.toggleBeadHighlight(index);
+  },
+  computeBeadStatsAndLabels() {
+    const total = this.gridSize * this.gridSize;
+    const labels = new Array(total).fill("");
+    const counter = Object.create(null);
+    if (!this.gridSize || !Array.isArray(this.gridIndexes) || this.gridIndexes.length < total) {
+      return { stats: [], labels };
+    }
+
+    for (let i = 0; i < total; i += 1) {
+      const idx = this.gridIndexes[i];
+      if (this.isBackgroundCell(idx)) continue;
+      const key = String(idx);
+      counter[key] = (counter[key] || 0) + 1;
+    }
+
+    for (let row = 0; row < this.gridSize; row += 1) {
+      let col = 0;
+      while (col < this.gridSize) {
+        const start = row * this.gridSize + col;
+        const index = this.gridIndexes[start];
+        if (this.isBackgroundCell(index)) {
+          col += 1;
+          continue;
+        }
+        let runLength = 1;
+        while (col + runLength < this.gridSize) {
+          const next = row * this.gridSize + col + runLength;
+          if (this.gridIndexes[next] !== index) break;
+          runLength += 1;
+        }
+        labels[start] = this.getPaletteColor(index).code;
+        for (let n = 2; n <= runLength; n += 1) {
+          labels[start + n - 1] = String(n);
+        }
+        col += runLength;
+      }
+    }
+
+    const stats = Object.keys(counter)
+      .map((key) => {
+        const idx = Number(key);
+        const color = this.getPaletteColor(idx);
+        return {
+          index: idx,
+          code: color.code,
+          hex: color.hex,
+          count: counter[key],
+          order: Number.isFinite(color.order) ? color.order : 9999
+        };
+      })
+      .sort((a, b) => (b.count - a.count) || (a.order - b.order));
+
+    return { stats, labels };
+  },
+  refreshBeadMetrics() {
+    this.backgroundIndexSet = this.computeBackgroundIndexSet();
+    const metrics = this.computeBeadStatsAndLabels();
+    this.beadCellLabels = metrics.labels;
+    const stillExists = metrics.stats.some((item) => item.index === this.data.beadHighlightIndex);
+    this.setData({
+      beadStats: metrics.stats,
+      beadHighlightIndex: stillExists ? this.data.beadHighlightIndex : -1
+    });
+  },
+  getTextColorByIndex(index) {
+    const color = this.getPaletteColor(index);
+    const hex = String((color && color.hex) || "#FFFFFF").replace("#", "");
+    if (hex.length !== 6) return "#1F2430";
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+    return luminance <= 126 ? "#FFFFFF" : "#1F2430";
+  },
+  readWheelDelta(event) {
+    const detail = (event && event.detail) || {};
+    const deltaRoot = toNumber(event && event.deltaY, NaN);
+    if (Number.isFinite(deltaRoot) && deltaRoot !== 0) return deltaRoot;
+
+    const wheelDeltaRoot = toNumber(event && event.wheelDelta, NaN);
+    if (Number.isFinite(wheelDeltaRoot) && wheelDeltaRoot !== 0) return -wheelDeltaRoot;
+
+    const deltaY = toNumber(detail.deltaY, NaN);
+    if (Number.isFinite(deltaY) && deltaY !== 0) return deltaY;
+
+    const wheelDelta = toNumber(detail.wheelDelta, NaN);
+    if (Number.isFinite(wheelDelta) && wheelDelta !== 0) return -wheelDelta;
+
+    const native = (event && event.originalEvent) || {};
+    const nativeDeltaY = toNumber(native.deltaY, NaN);
+    if (Number.isFinite(nativeDeltaY) && nativeDeltaY !== 0) return nativeDeltaY;
+
+    const nativeWheelDelta = toNumber(native.wheelDelta, NaN);
+    if (Number.isFinite(nativeWheelDelta) && nativeWheelDelta !== 0) return -nativeWheelDelta;
+    return 0;
+  },
+  isWheelZoomModifierPressed(event) {
+    const detail = (event && event.detail) || {};
+    const native = (event && event.originalEvent) || {};
+    const textModifiers = [
+      detail.modifierKey,
+      detail.modifiers,
+      detail.keyModifiers,
+      native.modifierKey,
+      native.modifiers
+    ]
+      .filter((value) => typeof value === "string")
+      .join("|")
+      .toLowerCase();
+    if (textModifiers.includes("ctrl") || textModifiers.includes("meta") || textModifiers.includes("command") || textModifiers.includes("cmd")) {
+      return true;
+    }
+
+    const numericModifiers = [
+      detail.modifiers,
+      detail.keyModifiers,
+      native.modifiers
+    ].find((value) => typeof value === "number");
+    if (Number.isFinite(numericModifiers) && numericModifiers > 0) {
+      return true;
+    }
+
+    const modValues = [
+      detail.ctrlKey,
+      detail.metaKey,
+      detail.commandKey,
+      native.ctrlKey,
+      native.metaKey,
+      event && event.ctrlKey,
+      event && event.metaKey
+    ];
+    const hasExplicitModifierInfo = modValues.some((value) => typeof value === "boolean");
+    if (!hasExplicitModifierInfo) {
+      return false;
+    }
+    return Boolean(modValues.some((value) => value === true));
+  },
+  forwardWheelScroll(deltaY) {
+    const nextTop = Math.max(0, (this.pageScrollTop || 0) + deltaY);
+    this.pageScrollTop = nextTop;
+    wx.pageScrollTo({
+      scrollTop: nextTop,
+      duration: 0
+    });
+  },
+  getWheelAnchorCanvasPoint(event) {
+    const detail = (event && event.detail) || {};
+    const native = (event && event.originalEvent) || {};
+    const pageX = toNumber(
+      detail.pageX,
+      toNumber(detail.x, toNumber(native.pageX, toNumber(native.x, NaN)))
+    );
+    const pageY = toNumber(
+      detail.pageY,
+      toNumber(detail.y, toNumber(native.pageY, toNumber(native.y, NaN)))
+    );
+    if (Number.isFinite(pageX) && Number.isFinite(pageY)) {
+      const point = this.toCanvasPoint({ pageX, pageY, clientX: pageX, clientY: pageY });
+      if (point) return point;
+    }
+    return {
+      x: this.data.canvasWidth / 2,
+      y: this.data.canvasHeight / 2
+    };
+  },
+  handleCanvasMouseWheel(event) {
+    if (!this.data.hasEditableGrid) return;
+    const deltaY = this.readWheelDelta(event);
+    if (!this.isWheelZoomModifierPressed(event)) {
+      if (deltaY) this.forwardWheelScroll(deltaY);
+      return;
+    }
+    this.closeEraserMenu();
+
+    if (!deltaY) return;
+
+    const direction = deltaY > 0 ? -1 : 1;
+    const step = this.scale >= 2 ? 0.1 : 0.14;
+    const nextScale = clamp(this.scale + direction * step, MIN_SCALE, MAX_SCALE);
+    if (nextScale === this.scale) return;
+
+    const anchorPoint = this.getWheelAnchorCanvasPoint(event);
+    const { drawCell, originX, originY } = this.getBoardMetrics();
+    const anchorBoardX = (anchorPoint.x - originX) / drawCell;
+    const anchorBoardY = (anchorPoint.y - originY) / drawCell;
+
+    this.interactionMode = "move";
+    this.applyScaleWithAnchor(nextScale, anchorPoint, anchorBoardX, anchorBoardY);
+    this.requestRedraw(true);
+
+    if (!this.wheelHintShown) {
+      this.wheelHintShown = true;
+      wx.showToast({
+        title: "滚轮缩放已启用",
+        icon: "none",
+        duration: 1000
+      });
+    }
+
+    if (this.wheelSettleTimer) clearTimeout(this.wheelSettleTimer);
+    this.wheelSettleTimer = setTimeout(() => {
+      this.interactionMode = "";
+      this.requestRedraw(false);
+      this.wheelSettleTimer = null;
+    }, 90);
   },
   getImageInfo(imagePath) {
     return new Promise((resolve, reject) => {
@@ -370,7 +719,10 @@ Page({
 
     this.gridSize = gridSize;
     this.gridIndexes = this.recenterLegacyGrid(indexGridRaw.slice(0, total), gridSize);
+    this.backgroundIndexSet = this.computeBackgroundIndexSet();
     this.hasManualEdits = false;
+    this.undoStack = [];
+    this.redoStack = [];
 
     const used = this.computeUsedColorIndexes();
     const initialColor = used.length ? used[0] : 0;
@@ -390,6 +742,8 @@ Page({
     if (this.canvasReady) {
       this.requestRedraw(false);
     }
+    this.refreshBeadMetrics();
+    this.syncHistoryState();
   },
   measureCanvas() {
     const query = this.createSelectorQuery();
@@ -429,7 +783,7 @@ Page({
       this.lightDrawRequested = false;
       this.redrawTimer = null;
       this.redrawCanvas(useLight);
-    }, 12);
+    }, 14);
   },
   getPaletteColor(index) {
     if (!Number.isFinite(index) || index < 0 || index >= this.palette.length) {
@@ -454,8 +808,38 @@ Page({
   handleStageTouchMove() {
     // 拦截画布区域触摸滚动，防止页面随手势上下移动
   },
-  updateScaleText() {
-    this.setData({ scaleText: `${Math.round(this.scale * 100)}%` });
+  updateScaleText(options = {}) {
+    const nextPercent = Math.round(this.scale * 100);
+    const nextText = `${nextPercent}%`;
+    const payload = {};
+    const throttleMs = toNumber(options.throttleMs, 0);
+    const now = Date.now();
+    if (throttleMs > 0 && !options.force) {
+      const elapsed = now - (this.lastScaleUiSyncAt || 0);
+      if (elapsed < throttleMs) return;
+    }
+    if (this.data.scaleText !== nextText) payload.scaleText = nextText;
+    if (options.syncSlider !== false && this.data.scalePercent !== nextPercent) {
+      payload.scalePercent = nextPercent;
+    }
+    const nextInput = String(nextPercent);
+    if (options.syncInput !== false && this.data.scaleInputValue !== nextInput) {
+      payload.scaleInputValue = nextInput;
+    }
+    if (!Object.keys(payload).length) return;
+    this.lastScaleUiSyncAt = now;
+    this.setData(payload);
+  },
+  showScaleOverlayHint(options = {}) {
+    const hold = Boolean(options.hold);
+    const delay = toNumber(options.delay, 650);
+    if (this.scaleOverlayTimer) clearTimeout(this.scaleOverlayTimer);
+    if (!this.data.showScaleOverlay) this.setData({ showScaleOverlay: true });
+    if (hold) return;
+    this.scaleOverlayTimer = setTimeout(() => {
+      this.setData({ showScaleOverlay: false });
+      this.scaleOverlayTimer = null;
+    }, Math.max(200, delay));
   },
   centerByGridCenter(scale = 1) {
     const safeScale = clamp(scale, MIN_SCALE, MAX_SCALE);
@@ -790,7 +1174,13 @@ Page({
 
     const { drawCell, originX, originY, canvasWidth, canvasHeight } = this.getBoardMetrics();
     const ctx = wx.createCanvasContext("editorCanvas", this);
-    const dragLikeMode = lightMode && (this.interactionMode === "move" || this.interactionMode === "pinch");
+    const isBeadMode = this.data.viewMode === "bead";
+    const dragLikeMode = lightMode && (
+      this.interactionMode === "move"
+      || this.interactionMode === "pinch"
+      || this.interactionMode === "scale"
+    );
+    const highlightIndex = this.data.beadHighlightIndex;
 
     ctx.setFillStyle("#FFFFFF");
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -798,18 +1188,54 @@ Page({
     if (this.data.hasEditableGrid && this.gridSize > 0 && this.gridIndexes.length) {
       let lastColor = "";
       for (let row = 0; row < this.gridSize; row += 1) {
-        for (let col = 0; col < this.gridSize; col += 1) {
-          const index = row * this.gridSize + col;
-          const color = this.cellColorByIndex(this.gridIndexes[index]);
-          if (color !== lastColor) {
-            ctx.setFillStyle(color);
-            lastColor = color;
+        let segmentStart = 0;
+        let segmentColor = this.cellColorByIndex(this.gridIndexes[row * this.gridSize]);
+        for (let col = 1; col <= this.gridSize; col += 1) {
+          const reachedEnd = col === this.gridSize;
+          const color = reachedEnd
+            ? ""
+            : this.cellColorByIndex(this.gridIndexes[row * this.gridSize + col]);
+          if (!reachedEnd && color === segmentColor) continue;
+          if (segmentColor !== lastColor) {
+            ctx.setFillStyle(segmentColor);
+            lastColor = segmentColor;
           }
-          ctx.fillRect(originX + col * drawCell, originY + row * drawCell, drawCell, drawCell);
+          ctx.fillRect(
+            originX + segmentStart * drawCell,
+            originY + row * drawCell,
+            (col - segmentStart) * drawCell,
+            drawCell
+          );
+          segmentStart = col;
+          segmentColor = color;
         }
       }
 
-      if (drawCell >= 4) {
+      if (isBeadMode && Number.isFinite(highlightIndex) && highlightIndex >= 0) {
+        ctx.setFillStyle("rgba(255,255,255,0.56)");
+        for (let row = 0; row < this.gridSize; row += 1) {
+          let segmentStart = -1;
+          for (let col = 0; col <= this.gridSize; col += 1) {
+            let shouldDim = false;
+            if (col < this.gridSize) {
+              const idx = this.gridIndexes[row * this.gridSize + col];
+              shouldDim = !this.isBackgroundCell(idx) && idx !== highlightIndex;
+            }
+            if (shouldDim && segmentStart < 0) segmentStart = col;
+            if (!shouldDim && segmentStart >= 0) {
+              ctx.fillRect(
+                originX + segmentStart * drawCell,
+                originY + row * drawCell,
+                (col - segmentStart) * drawCell,
+                drawCell
+              );
+              segmentStart = -1;
+            }
+          }
+        }
+      }
+
+      if (this.data.showGridLines && drawCell >= 4) {
         if (!dragLikeMode) {
           ctx.beginPath();
           for (let i = 0; i <= this.gridSize; i += 1) {
@@ -836,6 +1262,47 @@ Page({
         ctx.setLineWidth(1.2);
         ctx.setStrokeStyle("rgba(31,36,48,0.32)");
         ctx.stroke();
+      }
+
+      if (this.data.showLocatorLines && drawCell >= 4 && !dragLikeMode) {
+        ctx.beginPath();
+        for (let i = 0; i <= this.gridSize; i += 10) {
+          const p = i * drawCell;
+          ctx.moveTo(originX + p, originY);
+          ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+          ctx.moveTo(originX, originY + p);
+          ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+        }
+        ctx.setLineWidth(1.6);
+        ctx.setStrokeStyle("rgba(255,59,92,0.34)");
+        ctx.stroke();
+      }
+
+      const shouldDrawLabels = drawCell >= 8 && !dragLikeMode && (isBeadMode || this.data.showColorCodeInEdit);
+      if (shouldDrawLabels) {
+        const labels = Array.isArray(this.beadCellLabels) ? this.beadCellLabels : [];
+        ctx.setTextAlign("center");
+        ctx.setTextBaseline("middle");
+        for (let row = 0; row < this.gridSize; row += 1) {
+          for (let col = 0; col < this.gridSize; col += 1) {
+            const index = row * this.gridSize + col;
+            const colorIndex = this.gridIndexes[index];
+            if (this.isBackgroundCell(colorIndex)) continue;
+            const label = isBeadMode
+              ? (labels[index] || this.getPaletteColor(colorIndex).code)
+              : this.getPaletteColor(colorIndex).code;
+            if (!label) continue;
+            const length = String(label).length;
+            const textSize = clamp(Math.floor(drawCell * (length >= 3 ? 0.34 : 0.44)), 8, 14);
+            ctx.setFontSize(textSize);
+            ctx.setFillStyle(this.getTextColorByIndex(colorIndex));
+            ctx.fillText(
+              String(label),
+              originX + col * drawCell + drawCell / 2,
+              originY + row * drawCell + drawCell / 2
+            );
+          }
+        }
       }
     }
 
@@ -865,6 +1332,14 @@ Page({
   },
   drawLiveChangedCells(changedCells) {
     if (!this.canvasReady || !Array.isArray(changedCells) || !changedCells.length || !this.gridSize) return;
+    if (this.data.showColorCodeInEdit || this.data.viewMode === "bead") {
+      this.requestRedraw(true);
+      return;
+    }
+    if (changedCells.length > 220) {
+      this.requestRedraw(true);
+      return;
+    }
     const { drawCell, originX, originY } = this.getBoardMetrics();
     if (drawCell < 2) return;
 
@@ -899,36 +1374,103 @@ Page({
     }
 
     const lines = Object.keys(lineMarks).map((key) => lineMarks[key]);
-    for (let i = 0; i < lines.length; i += 1) {
-      const line = lines[i];
-      if (line.t === "v") {
-        const x = originX + line.xIndex * drawCell;
-        const y1 = originY + line.fromY * drawCell;
-        const y2 = originY + line.toY * drawCell;
-        const major = line.xIndex % 5 === 0;
-        ctx.beginPath();
-        ctx.setLineWidth(major ? 1.2 : 0.8);
-        ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
-        ctx.moveTo(x, y1);
-        ctx.lineTo(x, y2);
+    if (this.data.showGridLines) {
+      let hasMinor = false;
+      let hasMajor = false;
+      ctx.beginPath();
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const major = line.t === "v"
+          ? line.xIndex % 5 === 0
+          : line.yIndex % 5 === 0;
+        if (major) {
+          hasMajor = true;
+        } else {
+          hasMinor = true;
+        }
+        if (major) continue;
+        if (line.t === "v") {
+          const x = originX + line.xIndex * drawCell;
+          const y1 = originY + line.fromY * drawCell;
+          const y2 = originY + line.toY * drawCell;
+          ctx.moveTo(x, y1);
+          ctx.lineTo(x, y2);
+        } else {
+          const y = originY + line.yIndex * drawCell;
+          const x1 = originX + line.fromX * drawCell;
+          const x2 = originX + line.toX * drawCell;
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+        }
+      }
+      if (hasMinor) {
+        ctx.setLineWidth(0.8);
+        ctx.setStrokeStyle("rgba(31,36,48,0.18)");
         ctx.stroke();
-      } else {
-        const y = originY + line.yIndex * drawCell;
-        const x1 = originX + line.fromX * drawCell;
-        const x2 = originX + line.toX * drawCell;
-        const major = line.yIndex % 5 === 0;
+      }
+
+      if (hasMajor) {
         ctx.beginPath();
-        ctx.setLineWidth(major ? 1.2 : 0.8);
-        ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
-        ctx.moveTo(x1, y);
-        ctx.lineTo(x2, y);
+        for (let i = 0; i < lines.length; i += 1) {
+          const line = lines[i];
+          const major = line.t === "v"
+            ? line.xIndex % 5 === 0
+            : line.yIndex % 5 === 0;
+          if (!major) continue;
+          if (line.t === "v") {
+            const x = originX + line.xIndex * drawCell;
+            const y1 = originY + line.fromY * drawCell;
+            const y2 = originY + line.toY * drawCell;
+            ctx.moveTo(x, y1);
+            ctx.lineTo(x, y2);
+          } else {
+            const y = originY + line.yIndex * drawCell;
+            const x1 = originX + line.fromX * drawCell;
+            const x2 = originX + line.toX * drawCell;
+            ctx.moveTo(x1, y);
+            ctx.lineTo(x2, y);
+          }
+        }
+        ctx.setLineWidth(1.2);
+        ctx.setStrokeStyle("rgba(31,36,48,0.32)");
+        ctx.stroke();
+      }
+    }
+
+    if (this.data.showLocatorLines) {
+      let hasLocator = false;
+      ctx.beginPath();
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const locator = line.t === "v"
+          ? line.xIndex % 10 === 0
+          : line.yIndex % 10 === 0;
+        if (!locator) continue;
+        hasLocator = true;
+        if (line.t === "v") {
+          const x = originX + line.xIndex * drawCell;
+          const y1 = originY + line.fromY * drawCell;
+          const y2 = originY + line.toY * drawCell;
+          ctx.moveTo(x, y1);
+          ctx.lineTo(x, y2);
+        } else {
+          const y = originY + line.yIndex * drawCell;
+          const x1 = originX + line.fromX * drawCell;
+          const x2 = originX + line.toX * drawCell;
+          ctx.moveTo(x1, y);
+          ctx.lineTo(x2, y);
+        }
+      }
+      if (hasLocator) {
+        ctx.setLineWidth(1.4);
+        ctx.setStrokeStyle("rgba(255,59,92,0.34)");
         ctx.stroke();
       }
     }
 
     ctx.draw(true);
   },
-  applyScaleWithAnchor(nextScale, anchorCanvasPoint, anchorBoardX, anchorBoardY) {
+  applyScaleWithAnchor(nextScale, anchorCanvasPoint, anchorBoardX, anchorBoardY, updateOptions = {}) {
     const safeScale = clamp(nextScale, MIN_SCALE, MAX_SCALE);
     const baseCell = this.getBaseCell();
     const drawCell = Math.max(2, baseCell * safeScale);
@@ -943,7 +1485,7 @@ Page({
     this.scale = safeScale;
     this.offsetX = originX - centerOriginX;
     this.offsetY = originY - centerOriginY;
-    this.updateScaleText();
+    this.updateScaleText(updateOptions);
   },
   applyColorToCell(col, row, colorIndex, changesMap = null, changedCells = null) {
     if (!this.gridSize) return false;
@@ -1009,6 +1551,7 @@ Page({
       this.undoStack.shift();
     }
     this.redoStack = [];
+    this.syncHistoryState();
   },
   applyPatch(patch, direction) {
     if (!Array.isArray(patch) || !patch.length) return;
@@ -1021,6 +1564,7 @@ Page({
     }
   },
   schedulePersist() {
+    if (!this.data.autoSaveEnabled) return;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => {
       this.persistEditedWork();
@@ -1064,22 +1608,503 @@ Page({
   },
   handleSwitchTool(event) {
     const tool = event.currentTarget.dataset.tool;
-    if (!tool || tool === this.data.currentTool) return;
-    this.setData({ currentTool: tool });
+    if (!tool) return;
+    this.handleCloseColorPicker();
+    if (tool === this.data.currentTool) {
+      if (tool === "move" || tool === "moveShape") {
+        this.setData({
+          currentTool: "paint",
+          currentToolLabel: this.getToolLabel("paint"),
+          showEraserMenu: false,
+          showMoveShapeOverlay: false
+        });
+        wx.showToast({
+          title: "已返回画笔模式",
+          icon: "none",
+          duration: 1200
+        });
+        return;
+      }
+      if (this.data.showEraserMenu) {
+        this.setData({ showEraserMenu: false });
+      }
+      return;
+    }
+    this.setData({
+      currentTool: tool,
+      currentToolLabel: this.getToolLabel(tool),
+      showEraserMenu: false,
+      showMoveShapeOverlay: false
+    });
+    if (tool === "move" && !this.moveTipShown) {
+      this.moveTipShown = true;
+      wx.showToast({
+        title: "已进入拖拽，再点一次返回画笔",
+        icon: "none",
+        duration: 1800
+      });
+    }
+    if (tool === "moveShape" && !this.moveShapeTipShown) {
+      this.moveShapeTipShown = true;
+      wx.showToast({
+        title: "点击已填色格子后拖动，可整体移动图案",
+        icon: "none",
+        duration: 2200
+      });
+    }
+  },
+  handleToggleEraserMenu() {
+    this.handleCloseColorPicker();
+    wx.showActionSheet({
+      itemList: ["普通橡皮", "大橡皮（连续同色）"],
+      success: (res) => {
+        if (res.tapIndex === 0) {
+          this.applyEraserMode("normal");
+          return;
+        }
+        if (res.tapIndex === 1) {
+          this.applyEraserMode("flood");
+        }
+      }
+    });
+  },
+  applyEraserMode(mode) {
+    const safeMode = mode === "flood" ? "flood" : "normal";
+    const label = this.getToolLabel("erase", safeMode);
+    this.setData({
+      currentTool: "erase",
+      eraserMode: safeMode,
+      currentToolLabel: label,
+      showEraserMenu: false
+    });
+    if (safeMode === "flood") {
+      wx.showToast({
+        title: "已切换大橡皮，点击可连续擦除相连同色区域",
+        icon: "none",
+        duration: 2000
+      });
+      return;
+    }
+    wx.showToast({
+      title: "已切换普通橡皮",
+      icon: "none",
+      duration: 1400
+    });
+  },
+  handleSelectEraserMode(event) {
+    const mode = event.currentTarget.dataset.mode === "flood" ? "flood" : "normal";
+    this.applyEraserMode(mode);
+  },
+  getShiftedShapeGrid(sourceGrid, deltaCol, deltaRow) {
+    if (!Array.isArray(sourceGrid) || !this.gridSize) return null;
+    const size = this.gridSize;
+    const total = size * size;
+    if (sourceGrid.length < total) return null;
+    const fillIndex = this.getBackgroundFillIndex();
+    const output = new Array(total).fill(fillIndex);
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const index = row * size + col;
+        const colorIndex = sourceGrid[index];
+        if (this.isBackgroundCell(colorIndex)) continue;
+        const nextCol = col + deltaCol;
+        const nextRow = row + deltaRow;
+        if (nextCol < 0 || nextRow < 0 || nextCol >= size || nextRow >= size) continue;
+        output[nextRow * size + nextCol] = colorIndex;
+      }
+    }
+    return output;
+  },
+  computeContentBoundsFromGrid(indexGrid) {
+    if (!Array.isArray(indexGrid) || !this.gridSize) return null;
+    const size = this.gridSize;
+    let minCol = size;
+    let minRow = size;
+    let maxCol = -1;
+    let maxRow = -1;
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const index = row * size + col;
+        if (this.isBackgroundCell(indexGrid[index])) continue;
+        if (col < minCol) minCol = col;
+        if (row < minRow) minRow = row;
+        if (col > maxCol) maxCol = col;
+        if (row > maxRow) maxRow = row;
+      }
+    }
+    if (maxCol < minCol || maxRow < minRow) return null;
+    return { minCol, minRow, maxCol, maxRow };
+  },
+  quantizeMoveShapeDelta(rawDelta, currentDelta) {
+    const gate = 0.56;
+    if (!Number.isFinite(rawDelta)) return currentDelta;
+    let next = currentDelta;
+    if (rawDelta > currentDelta + gate) {
+      const step = Math.floor(rawDelta - currentDelta - gate) + 1;
+      next = currentDelta + Math.max(1, step);
+    } else if (rawDelta < currentDelta - gate) {
+      const step = Math.floor(currentDelta - rawDelta - gate) + 1;
+      next = currentDelta - Math.max(1, step);
+    }
+    return next;
+  },
+  applyMoveShapeResult(sourceGrid) {
+    if (!Array.isArray(sourceGrid) || !sourceGrid.length || !this.gridIndexes.length) {
+      this.requestRedraw(false);
+      return;
+    }
+    const total = this.gridSize * this.gridSize;
+    const changes = Object.create(null);
+    for (let i = 0; i < total; i += 1) {
+      if (sourceGrid[i] === this.gridIndexes[i]) continue;
+      changes[i] = sourceGrid[i];
+    }
+    this.applyOperationPatch(changes, null, "已移动图案");
+  },
+  handleQuickAction(event) {
+    const action = event.currentTarget.dataset.action;
+    if (!action) return;
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
+    if (!this.data.hasEditableGrid) {
+      wx.showToast({ title: "暂无可编辑图纸", icon: "none" });
+      return;
+    }
+
+    if (action === "toggleGrid") {
+      const next = !this.data.showGridLines;
+      this.setData({ showGridLines: next }, () => this.requestRedraw(false));
+      return;
+    }
+    if (action === "toggleColorCode") {
+      const next = !this.data.showColorCodeInEdit;
+      this.setData({ showColorCodeInEdit: next }, () => this.requestRedraw(false));
+      return;
+    }
+    if (action === "toggleLocator") {
+      const next = !this.data.showLocatorLines;
+      this.setData({ showLocatorLines: next }, () => this.requestRedraw(false));
+      return;
+    }
+    if (action === "mirror") {
+      wx.showActionSheet({
+        itemList: ["水平镜像", "垂直镜像"],
+        success: (res) => {
+          if (res.tapIndex === 0) this.applyMirror("horizontal");
+          if (res.tapIndex === 1) this.applyMirror("vertical");
+        }
+      });
+      return;
+    }
+    if (action === "center") {
+      this.handleResetView();
+      return;
+    }
+    if (action === "denoise") {
+      this.applyDenoise();
+      return;
+    }
+    if (action === "replaceColor") {
+      this.handleReplaceSelectedColor();
+      return;
+    }
+    if (action === "clearCanvas") {
+      wx.showModal({
+        title: "清空画布",
+        content: "将清除当前图纸全部已绘制内容，是否继续？",
+        confirmColor: "#ff3b5c",
+        success: (res) => {
+          if (!res.confirm) return;
+          const fillIndex = this.getBackgroundFillIndex();
+          const changes = Object.create(null);
+          const changedCells = [];
+          for (let row = 0; row < this.gridSize; row += 1) {
+            for (let col = 0; col < this.gridSize; col += 1) {
+              this.applyColorToCell(col, row, fillIndex, changes, changedCells);
+            }
+          }
+          const changed = this.applyOperationPatch(changes, changedCells, "画布已清空");
+          if (!changed) {
+            wx.showToast({ title: "画布已是空白", icon: "none" });
+          }
+        }
+      });
+    }
+  },
+  eraseConnectedArea(cell, changesMap, changedCells) {
+    if (!cell || !Number.isFinite(cell.index) || !this.gridSize || !this.gridIndexes.length) return false;
+    const targetIndex = this.gridIndexes[cell.index];
+    if (!Number.isFinite(targetIndex) || targetIndex < 0 || this.isBackgroundCell(targetIndex)) {
+      return false;
+    }
+
+    const size = this.gridSize;
+    const total = size * size;
+    const queue = new Int32Array(total);
+    const visited = new Uint8Array(total);
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = cell.index;
+    visited[cell.index] = 1;
+    let changed = false;
+
+    while (head < tail) {
+      const current = queue[head++];
+      if (this.gridIndexes[current] !== targetIndex) continue;
+      const row = Math.floor(current / size);
+      const col = current - row * size;
+
+      if (this.applyColorToCell(col, row, -1, changesMap, changedCells)) {
+        changed = true;
+      }
+
+      if (col > 0) {
+        const next = current - 1;
+        if (!visited[next] && this.gridIndexes[next] === targetIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (col < size - 1) {
+        const next = current + 1;
+        if (!visited[next] && this.gridIndexes[next] === targetIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (row > 0) {
+        const next = current - size;
+        if (!visited[next] && this.gridIndexes[next] === targetIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (row < size - 1) {
+        const next = current + size;
+        if (!visited[next] && this.gridIndexes[next] === targetIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+    }
+    return changed;
+  },
+  fillConnectedArea(cell, targetColorIndex, changesMap, changedCells) {
+    if (!cell || !Number.isFinite(cell.index) || !this.gridSize || !this.gridIndexes.length) return false;
+    const sourceIndex = this.gridIndexes[cell.index];
+    const fillIndex = clamp(Math.floor(targetColorIndex), 0, this.palette.length - 1);
+    if (!Number.isFinite(sourceIndex) || sourceIndex === fillIndex) return false;
+
+    const size = this.gridSize;
+    const total = size * size;
+    const queue = new Int32Array(total);
+    const visited = new Uint8Array(total);
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = cell.index;
+    visited[cell.index] = 1;
+    let changed = false;
+
+    while (head < tail) {
+      const current = queue[head++];
+      if (this.gridIndexes[current] !== sourceIndex) continue;
+      const row = Math.floor(current / size);
+      const col = current - row * size;
+      if (this.applyColorToCell(col, row, fillIndex, changesMap, changedCells)) {
+        changed = true;
+      }
+
+      if (col > 0) {
+        const next = current - 1;
+        if (!visited[next] && this.gridIndexes[next] === sourceIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (col < size - 1) {
+        const next = current + 1;
+        if (!visited[next] && this.gridIndexes[next] === sourceIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (row > 0) {
+        const next = current - size;
+        if (!visited[next] && this.gridIndexes[next] === sourceIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+      if (row < size - 1) {
+        const next = current + size;
+        if (!visited[next] && this.gridIndexes[next] === sourceIndex) {
+          visited[next] = 1;
+          queue[tail++] = next;
+        }
+      }
+    }
+    return changed;
+  },
+  applyOperationPatch(changesMap, changedCells, toastTitle = "") {
+    const keys = Object.keys(changesMap || {});
+    if (!keys.length) return false;
+    this.commitStrokeChanges(changesMap);
+    this.refreshUsedPalette();
+    this.refreshBeadMetrics();
+    this.schedulePersist();
+    if (Array.isArray(changedCells) && changedCells.length && changedCells.length <= 240) {
+      this.drawLiveChangedCells(changedCells);
+      this.requestRedraw(false);
+    } else {
+      this.requestRedraw(false);
+    }
+    if (toastTitle) {
+      wx.showToast({ title: toastTitle, icon: "none", duration: 1400 });
+    }
+    return true;
+  },
+  getBackgroundFillIndex() {
+    const keys = Object.keys(this.backgroundIndexSet || {});
+    for (let i = 0; i < keys.length; i += 1) {
+      const index = Number(keys[i]);
+      if (!Number.isFinite(index) || index < 0) continue;
+      if (this.isNearWhiteByIndex(index)) return index;
+    }
+    for (let i = 0; i < keys.length; i += 1) {
+      const index = Number(keys[i]);
+      if (Number.isFinite(index) && index >= 0) return index;
+    }
+    return 0;
+  },
+  applyMirror(direction) {
+    if (!this.gridSize || !this.gridIndexes.length) return;
+    const size = this.gridSize;
+    const total = size * size;
+    const nextGrid = new Array(total);
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const srcIndex = row * size + col;
+        const toCol = direction === "horizontal" ? (size - 1 - col) : col;
+        const toRow = direction === "vertical" ? (size - 1 - row) : row;
+        const targetIndex = toRow * size + toCol;
+        nextGrid[targetIndex] = this.gridIndexes[srcIndex];
+      }
+    }
+    const changes = Object.create(null);
+    for (let i = 0; i < total; i += 1) {
+      if (nextGrid[i] !== this.gridIndexes[i]) {
+        changes[i] = this.gridIndexes[i];
+        this.gridIndexes[i] = nextGrid[i];
+      }
+    }
+    this.applyOperationPatch(changes, null, direction === "horizontal" ? "已水平镜像" : "已垂直镜像");
+  },
+  applyDenoise() {
+    if (!this.gridSize || !this.gridIndexes.length) return;
+    const size = this.gridSize;
+    const total = size * size;
+    const original = this.gridIndexes.slice(0, total);
+    const changes = Object.create(null);
+    const changedCells = [];
+    const dirs = [
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1]
+    ];
+
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const index = row * size + col;
+        const current = original[index];
+        if (this.isBackgroundCell(current)) continue;
+
+        const neighborCounter = Object.create(null);
+        let sameCount = 0;
+        let validNeighborCount = 0;
+        for (let i = 0; i < dirs.length; i += 1) {
+          const nc = col + dirs[i][0];
+          const nr = row + dirs[i][1];
+          if (nc < 0 || nr < 0 || nc >= size || nr >= size) continue;
+          const nIndex = nr * size + nc;
+          const nColor = original[nIndex];
+          if (this.isBackgroundCell(nColor)) continue;
+          validNeighborCount += 1;
+          if (nColor === current) sameCount += 1;
+          const key = String(nColor);
+          neighborCounter[key] = (neighborCounter[key] || 0) + 1;
+        }
+
+        if (validNeighborCount < 3 || sameCount > 0) continue;
+        let bestColor = current;
+        let bestCount = 0;
+        Object.keys(neighborCounter).forEach((key) => {
+          const count = neighborCounter[key];
+          if (count > bestCount) {
+            bestCount = count;
+            bestColor = Number(key);
+          }
+        });
+        if (!Number.isFinite(bestColor) || bestColor === current || bestCount < 2) continue;
+        this.applyColorToCell(col, row, bestColor, changes, changedCells);
+      }
+    }
+
+    const changed = this.applyOperationPatch(changes, changedCells, "已去除杂色");
+    if (!changed) {
+      wx.showToast({ title: "未检测到可优化的杂色", icon: "none" });
+    }
+  },
+  handleReplaceSelectedColor() {
+    const fromIndex = this.data.selectedColorIndex;
+    const candidates = this.computeUsedColorIndexes()
+      .filter((index) => index !== fromIndex)
+      .slice(0, 8)
+      .map((index) => this.getPaletteColor(index));
+    if (!candidates.length) {
+      wx.showToast({ title: "暂无可替换目标色", icon: "none" });
+      return;
+    }
+    wx.showActionSheet({
+      itemList: candidates.map((item) => `${item.code} ${item.hex}`),
+      success: (res) => {
+        const chosen = candidates[res.tapIndex];
+        if (!chosen) return;
+        const changes = Object.create(null);
+        const changedCells = [];
+        for (let row = 0; row < this.gridSize; row += 1) {
+          for (let col = 0; col < this.gridSize; col += 1) {
+            const index = row * this.gridSize + col;
+            if (this.gridIndexes[index] !== fromIndex) continue;
+            this.applyColorToCell(col, row, chosen.index, changes, changedCells);
+          }
+        }
+        const changed = this.applyOperationPatch(changes, changedCells, "已完成批量换色");
+        if (!changed) {
+          wx.showToast({ title: "当前色没有可替换像素", icon: "none" });
+        }
+      }
+    });
   },
   handlePickColor(event) {
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
     const raw = event.currentTarget.dataset.index;
     const index = toNumber(raw, 0);
     if (index < 0 || index >= this.palette.length) return;
     const color = this.getPaletteColor(index);
+    const shouldSwitchToPaint = this.data.currentTool === "erase";
     this.setData({
       selectedColorIndex: index,
       selectedColorCode: color.code,
       selectedColorHex: color.hex,
-      currentTool: this.data.currentTool === "erase" ? "paint" : this.data.currentTool
+      currentTool: shouldSwitchToPaint ? "paint" : this.data.currentTool,
+      currentToolLabel: shouldSwitchToPaint ? TOOL_LABELS.paint : this.data.currentToolLabel
     });
   },
   handleCanvasTouchStart(event) {
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
     if (!this.data.hasEditableGrid) return;
     const touches = Array.isArray(event.touches) ? event.touches : [];
     if (!touches.length) return;
@@ -1106,6 +2131,19 @@ Page({
 
     const point = this.toCanvasPoint(touches[0]);
     if (!point) return;
+
+    if (this.data.viewMode === "bead") {
+      this.touchState = {
+        type: "bead",
+        startPoint: point,
+        lastPoint: point,
+        startOffsetX: this.offsetX,
+        startOffsetY: this.offsetY,
+        moved: false
+      };
+      this.interactionMode = "move";
+      return;
+    }
 
     if (this.data.currentTool === "move") {
       this.touchState = {
@@ -1134,6 +2172,73 @@ Page({
           selectedColorHex: color.hex
         });
       }
+      return;
+    }
+
+    if (this.data.currentTool === "bucket") {
+      const changes = Object.create(null);
+      const changedCells = [];
+      const changed = this.fillConnectedArea(cell, this.data.selectedColorIndex, changes, changedCells);
+      if (!changed) {
+        wx.showToast({ title: "当前区域颜色一致，无需填充", icon: "none" });
+        return;
+      }
+      this.interactionMode = "paint";
+      this.applyOperationPatch(changes, changedCells);
+      return;
+    }
+
+    if (this.data.currentTool === "moveShape") {
+      const sourceColor = this.gridIndexes[cell.index];
+      if (this.isBackgroundCell(sourceColor)) {
+        wx.showToast({
+          title: "请先点击已填色格子，再拖动整体移动",
+          icon: "none",
+          duration: 1500
+        });
+        return;
+      }
+      this.touchState = {
+        type: "moveShape",
+        startPoint: point,
+        deltaCol: 0,
+        deltaRow: 0,
+        sourceGrid: this.gridIndexes.slice(),
+        minDeltaCol: 0,
+        maxDeltaCol: 0,
+        minDeltaRow: 0,
+        maxDeltaRow: 0
+      };
+      const bounds = this.computeContentBoundsFromGrid(this.touchState.sourceGrid);
+      if (!bounds) {
+        this.touchState = null;
+        this.interactionMode = "";
+        wx.showToast({ title: "图案为空，无法移动", icon: "none" });
+        return;
+      }
+      this.touchState.minDeltaCol = -bounds.minCol;
+      this.touchState.maxDeltaCol = this.gridSize - 1 - bounds.maxCol;
+      this.touchState.minDeltaRow = -bounds.minRow;
+      this.touchState.maxDeltaRow = this.gridSize - 1 - bounds.maxRow;
+      this.interactionMode = "moveShape";
+      this.setData({
+        showMoveShapeOverlay: true,
+        moveShapeDeltaText: "Δx 0 · Δy 0"
+      });
+      return;
+    }
+
+    if (this.data.currentTool === "erase" && this.data.eraserMode === "flood") {
+      const changes = Object.create(null);
+      const changedCells = [];
+      const changed = this.eraseConnectedArea(cell, changes, changedCells);
+      if (!changed) return;
+      this.interactionMode = "paint";
+      this.drawLiveChangedCells(changedCells);
+      this.commitStrokeChanges(changes);
+      this.refreshUsedPalette();
+      this.refreshBeadMetrics();
+      this.schedulePersist();
       return;
     }
 
@@ -1186,6 +2291,25 @@ Page({
     const point = this.toCanvasPoint(touches[0]);
     if (!point) return;
 
+    if (this.touchState.type === "bead") {
+      const dx = point.x - this.touchState.startPoint.x;
+      const dy = point.y - this.touchState.startPoint.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        this.touchState.moved = true;
+      }
+      const nextOffsetX = this.touchState.startOffsetX + dx;
+      const nextOffsetY = this.touchState.startOffsetY + dy;
+      if (Math.abs(nextOffsetX - this.offsetX) < 0.8 && Math.abs(nextOffsetY - this.offsetY) < 0.8) {
+        this.touchState.lastPoint = point;
+        return;
+      }
+      this.offsetX = nextOffsetX;
+      this.offsetY = nextOffsetY;
+      this.touchState.lastPoint = point;
+      this.requestRedraw(true);
+      return;
+    }
+
     if (this.touchState.type === "move") {
       const dx = point.x - this.touchState.startPoint.x;
       const dy = point.y - this.touchState.startPoint.y;
@@ -1194,6 +2318,27 @@ Page({
       if (Math.abs(nextOffsetX - this.offsetX) < 0.8 && Math.abs(nextOffsetY - this.offsetY) < 0.8) return;
       this.offsetX = nextOffsetX;
       this.offsetY = nextOffsetY;
+      this.requestRedraw(true);
+      return;
+    }
+
+    if (this.touchState.type === "moveShape") {
+      const { drawCell } = this.getBoardMetrics();
+      const rawDeltaCol = (point.x - this.touchState.startPoint.x) / drawCell;
+      const rawDeltaRow = (point.y - this.touchState.startPoint.y) / drawCell;
+      let deltaCol = this.quantizeMoveShapeDelta(rawDeltaCol, this.touchState.deltaCol);
+      let deltaRow = this.quantizeMoveShapeDelta(rawDeltaRow, this.touchState.deltaRow);
+      deltaCol = clamp(deltaCol, this.touchState.minDeltaCol, this.touchState.maxDeltaCol);
+      deltaRow = clamp(deltaRow, this.touchState.minDeltaRow, this.touchState.maxDeltaRow);
+      if (deltaCol === this.touchState.deltaCol && deltaRow === this.touchState.deltaRow) return;
+      const shifted = this.getShiftedShapeGrid(this.touchState.sourceGrid, deltaCol, deltaRow);
+      if (!shifted) return;
+      this.touchState.deltaCol = deltaCol;
+      this.touchState.deltaRow = deltaRow;
+      this.gridIndexes = shifted;
+      this.setData({
+        moveShapeDeltaText: `Δx ${deltaCol} · Δy ${deltaRow}`
+      });
       this.requestRedraw(true);
       return;
     }
@@ -1221,20 +2366,44 @@ Page({
     }
   },
   handleCanvasTouchEnd() {
+    if (this.touchState && this.touchState.type === "moveShape") {
+      const sourceGrid = this.touchState.sourceGrid;
+      this.touchState = null;
+      this.interactionMode = "";
+      this.setData({ showMoveShapeOverlay: false });
+      this.applyMoveShapeResult(sourceGrid);
+      return;
+    }
+
+    if (this.touchState && this.touchState.type === "bead") {
+      if (!this.touchState.moved) {
+        const cell = this.pointToCell(this.touchState.lastPoint || this.touchState.startPoint);
+        if (cell) {
+          const index = this.gridIndexes[cell.index];
+          if (!this.isBackgroundCell(index)) {
+            this.toggleBeadHighlight(index);
+          }
+        }
+      }
+      this.touchState = null;
+      this.interactionMode = "";
+      this.requestRedraw(false);
+      return;
+    }
+
     if (this.touchState && this.touchState.type === "paint" && this.touchState.hasChanged) {
       this.commitStrokeChanges(this.touchState.changes);
       this.refreshUsedPalette();
+      this.refreshBeadMetrics();
       this.schedulePersist();
     }
     this.touchState = null;
     this.interactionMode = "";
     this.requestRedraw(false);
   },
-  handleZoomTap(event) {
-    const action = event.currentTarget.dataset.action;
-    const delta = action === "in" ? 0.2 : -0.2;
-    const nextScale = clamp(this.scale + delta, MIN_SCALE, MAX_SCALE);
-
+  applyScaleByPercent(percent, lightRedraw = true, updateOptions = {}) {
+    const safePercent = clamp(Math.round(toNumber(percent, 100) || 100), Math.round(MIN_SCALE * 100), Math.round(MAX_SCALE * 100));
+    const nextScale = safePercent / 100;
     const center = {
       x: this.data.canvasWidth / 2,
       y: this.data.canvasHeight / 2
@@ -1242,38 +2411,101 @@ Page({
     const { drawCell, originX, originY } = this.getBoardMetrics();
     const anchorBoardX = (center.x - originX) / drawCell;
     const anchorBoardY = (center.y - originY) / drawCell;
-    this.applyScaleWithAnchor(nextScale, center, anchorBoardX, anchorBoardY);
-    this.requestRedraw(false);
+    const syncSlider = updateOptions.syncSlider !== false;
+    const syncInput = updateOptions.syncInput !== false;
+    const throttleMs = toNumber(updateOptions.throttleMs, 0);
+    this.applyScaleWithAnchor(nextScale, center, anchorBoardX, anchorBoardY, {
+      syncSlider,
+      syncInput,
+      throttleMs
+    });
+    this.showScaleOverlayHint({ hold: Boolean(updateOptions.holdOverlay) });
+    this.requestRedraw(lightRedraw);
+  },
+  handleScaleSliderChanging(event) {
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
+    if (!this.data.hasEditableGrid) return;
+    const percent = toNumber(event && event.detail && event.detail.value, this.data.scalePercent || 100);
+    this.interactionMode = "scale";
+    this.applyScaleByPercent(percent, true, {
+      syncSlider: false,
+      syncInput: false,
+      throttleMs: 45,
+      holdOverlay: true
+    });
+  },
+  handleScaleSliderChange(event) {
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
+    if (!this.data.hasEditableGrid) return;
+    const percent = toNumber(event && event.detail && event.detail.value, this.data.scalePercent || 100);
+    this.interactionMode = "";
+    this.applyScaleByPercent(percent, false, {
+      syncSlider: true,
+      syncInput: true,
+      holdOverlay: false
+    });
+  },
+  handleScaleInput(event) {
+    const raw = String((event && event.detail && event.detail.value) || "");
+    const sanitized = raw.replace(/[^\d]/g, "").slice(0, 3);
+    this.setData({ scaleInputValue: sanitized });
+  },
+  commitScaleInput(rawValue) {
+    if (!this.data.hasEditableGrid) return;
+    const numeric = toNumber(String(rawValue || "").replace(/[^\d]/g, ""), this.data.scalePercent || 100);
+    const safePercent = clamp(Math.round(numeric), Math.round(MIN_SCALE * 100), Math.round(MAX_SCALE * 100));
+    this.setData({
+      scaleInputValue: String(safePercent),
+      scalePercent: safePercent,
+      scaleText: `${safePercent}%`
+    });
+    this.interactionMode = "";
+    this.applyScaleByPercent(safePercent, false, {
+      syncSlider: true,
+      syncInput: true,
+      holdOverlay: false
+    });
+  },
+  handleScaleInputConfirm(event) {
+    this.closeEraserMenu();
+    this.handleCloseColorPicker();
+    this.commitScaleInput(event && event.detail && event.detail.value);
+  },
+  handleScaleInputBlur(event) {
+    this.commitScaleInput(event && event.detail && event.detail.value);
   },
   handleResetView() {
+    this.closeEraserMenu();
     this.centerByGridCenter(1);
     this.requestRedraw(false);
   },
   handleUndo() {
-    if (!this.undoStack.length) {
-      wx.showToast({ title: "没有可撤销步骤", icon: "none" });
-      return;
-    }
+    this.closeEraserMenu();
+    if (!this.undoStack.length) return;
     const patch = this.undoStack.pop();
     this.applyPatch(patch, "undo");
     this.hasManualEdits = true;
     this.redoStack.push(patch);
     this.refreshUsedPalette();
+    this.refreshBeadMetrics();
     this.requestRedraw(false);
     this.schedulePersist();
+    this.syncHistoryState();
   },
   handleRedo() {
-    if (!this.redoStack.length) {
-      wx.showToast({ title: "没有可重做步骤", icon: "none" });
-      return;
-    }
+    this.closeEraserMenu();
+    if (!this.redoStack.length) return;
     const patch = this.redoStack.pop();
     this.applyPatch(patch, "redo");
     this.hasManualEdits = true;
     this.undoStack.push(patch);
     this.refreshUsedPalette();
+    this.refreshBeadMetrics();
     this.requestRedraw(false);
     this.schedulePersist();
+    this.syncHistoryState();
   },
   async renderExportPng(withGrid = true) {
     if (!this.gridSize || !this.gridIndexes.length) {
@@ -1290,14 +2522,26 @@ Page({
 
       let lastColor = "";
       for (let row = 0; row < this.gridSize; row += 1) {
-        for (let col = 0; col < this.gridSize; col += 1) {
-          const index = row * this.gridSize + col;
-          const color = this.cellColorByIndex(this.gridIndexes[index]);
-          if (color !== lastColor) {
-            ctx.setFillStyle(color);
-            lastColor = color;
+        let segmentStart = 0;
+        let segmentColor = this.cellColorByIndex(this.gridIndexes[row * this.gridSize]);
+        for (let col = 1; col <= this.gridSize; col += 1) {
+          const reachedEnd = col === this.gridSize;
+          const color = reachedEnd
+            ? ""
+            : this.cellColorByIndex(this.gridIndexes[row * this.gridSize + col]);
+          if (!reachedEnd && color === segmentColor) continue;
+          if (segmentColor !== lastColor) {
+            ctx.setFillStyle(segmentColor);
+            lastColor = segmentColor;
           }
-          ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+          ctx.fillRect(
+            segmentStart * cellSize,
+            row * cellSize,
+            (col - segmentStart) * cellSize,
+            cellSize
+          );
+          segmentStart = col;
+          segmentColor = color;
         }
       }
 

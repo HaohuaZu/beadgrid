@@ -10,15 +10,87 @@
     <button class="export-btn" bindtap="handleSaveExport">保存/导图</button>
   </view>
 
-  <view class="tool-row brand-panel">
-    <view class="tool-btn {{currentTool === 'paint' ? 'is-active' : ''}}" data-tool="paint" bindtap="handleSwitchTool">画笔</view>
-    <view class="tool-btn {{currentTool === 'erase' ? 'is-active' : ''}}" data-tool="erase" bindtap="handleSwitchTool">橡皮</view>
-    <view class="tool-btn {{currentTool === 'pick' ? 'is-active' : ''}}" data-tool="pick" bindtap="handleSwitchTool">取色</view>
-    <view class="tool-btn {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">拖拽</view>
+  <view class="mode-row brand-panel">
+    <view
+      class="mode-btn {{viewMode === 'edit' ? 'is-active' : ''}}"
+      data-mode="edit"
+      bindtap="handleSwitchViewMode"
+    >编辑模式</view>
+    <view
+      class="mode-btn {{viewMode === 'bead' ? 'is-active' : ''}}"
+      data-mode="bead"
+      bindtap="handleSwitchViewMode"
+    >拼豆模式</view>
+  </view>
+
+  <view class="status-row brand-panel">
+    <view class="status-chip">
+      <text class="status-label">工具</text>
+      <text class="status-value">{{viewMode === 'bead' ? '拼豆' : currentToolLabel}}</text>
+    </view>
+    <view class="status-chip status-color-chip" bindtap="handleOpenColorPicker">
+      <view class="status-color-dot" style="background: {{selectedColorHex}};"></view>
+      <text class="status-value">{{selectedColorCode}}</text>
+      <text class="status-color-arrow">▾</text>
+    </view>
+    <view class="status-chip status-history-chip">
+      <button
+        class="status-action-btn {{!canUndo ? 'is-disabled' : ''}}"
+        disabled="{{!canUndo}}"
+        bindtap="handleUndo"
+      >撤销</button>
+      <button
+        class="status-action-btn {{!canRedo ? 'is-disabled' : ''}}"
+        disabled="{{!canRedo}}"
+        bindtap="handleRedo"
+      >重做</button>
+      <text class="status-history-text">{{historyText}}</text>
+    </view>
+  </view>
+
+  <view wx:if="{{viewMode === 'edit'}}" class="tool-rail brand-panel">
+    <scroll-view class="tool-scroll" scroll-x="true" enable-flex="true" show-scrollbar="false">
+      <view class="tool-inline">
+        <view class="tool-chip {{currentTool === 'paint' ? 'is-active' : ''}}" data-tool="paint" bindtap="handleSwitchTool">
+          <text class="tool-emoji">✎</text>
+          <text>画笔</text>
+        </view>
+        <view class="tool-chip tool-erase {{currentTool === 'erase' ? 'is-active' : ''}}">
+          <view class="tool-erase-main" data-tool="erase" bindtap="handleSwitchTool">
+            <text class="tool-emoji">⌫</text>
+            <text>{{eraserMode === 'flood' ? '大橡皮' : '橡皮'}}</text>
+          </view>
+          <view class="tool-erase-more" catchtap="handleToggleEraserMenu">▾</view>
+        </view>
+        <view class="tool-chip {{currentTool === 'pick' ? 'is-active' : ''}}" data-tool="pick" bindtap="handleSwitchTool">
+          <text class="tool-emoji">◎</text>
+          <text>取色</text>
+        </view>
+        <view class="tool-chip {{currentTool === 'bucket' ? 'is-active' : ''}}" data-tool="bucket" bindtap="handleSwitchTool">
+          <text class="tool-emoji">▣</text>
+          <text>油漆桶</text>
+        </view>
+        <view class="tool-chip tool-action" data-action="denoise" bindtap="handleQuickAction">
+          <text class="tool-emoji">◇</text>
+          <text>去杂色</text>
+        </view>
+        <view class="tool-chip tool-action" data-action="replaceColor" bindtap="handleQuickAction">
+          <text class="tool-emoji">↺</text>
+          <text>批量换色</text>
+        </view>
+        <view class="tool-chip tool-action tool-danger" data-action="clearCanvas" bindtap="handleQuickAction">
+          <text class="tool-emoji">✕</text>
+          <text>清空</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
 
   <view class="canvas-panel brand-panel">
-    <view class="canvas-stage" catchtouchmove="handleStageTouchMove">
+    <view
+      class="canvas-stage"
+      catchtouchmove="handleStageTouchMove"
+    >
       <canvas
         canvas-id="editorCanvas"
         class="editor-canvas"
@@ -29,6 +101,8 @@
         catchtouchend="handleCanvasTouchEnd"
         catchtouchcancel="handleCanvasTouchEnd"
       ></canvas>
+      <view wx:if="{{showScaleOverlay}}" class="scale-overlay">{{scaleText}}</view>
+      <view wx:if="{{showMoveShapeOverlay}}" class="move-shape-overlay">{{moveShapeDeltaText}}</view>
       <view wx:if="{{!hasEditableGrid}}" class="canvas-empty">
         <text>暂未加载可编辑图纸</text>
         <text class="canvas-empty-sub">请返回创作页重新生成后再试</text>
@@ -36,19 +110,49 @@
     </view>
   </view>
 
-  <view class="zoom-row">
-    <button class="zoom-btn" data-action="out" bindtap="handleZoomTap">缩小</button>
-    <view class="scale-pill">{{scaleText}}</view>
-    <button class="zoom-btn" data-action="in" bindtap="handleZoomTap">放大</button>
+  <view class="view-tools-row brand-panel">
+    <view class="view-tool-title">视图</view>
+    <view class="view-tool-chip {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">拖拽</view>
+    <view class="view-tool-chip {{currentTool === 'moveShape' ? 'is-active' : ''}}" data-tool="moveShape" bindtap="handleSwitchTool">移动图案</view>
+    <view class="view-tool-chip {{showGridLines ? 'is-active' : ''}}" data-action="toggleGrid" bindtap="handleQuickAction">网格</view>
+    <view class="view-tool-chip {{showColorCodeInEdit ? 'is-active' : ''}}" data-action="toggleColorCode" bindtap="handleQuickAction">色号</view>
+    <view class="view-tool-chip {{showLocatorLines ? 'is-active' : ''}}" data-action="toggleLocator" bindtap="handleQuickAction">定位线</view>
+    <view class="view-tool-chip" data-action="mirror" bindtap="handleQuickAction">镜像</view>
+    <view class="view-tool-chip" data-action="center" bindtap="handleQuickAction">居中</view>
+  </view>
+  <view wx:if="{{viewMode === 'edit' && currentTool === 'moveShape'}}" class="move-shape-tip brand-panel">
+    点击已填色格子后拖动，可整体移动图案
   </view>
 
-  <view class="action-row">
-    <button class="action-btn" bindtap="handleUndo">撤销</button>
-    <button class="action-btn" bindtap="handleRedo">重做</button>
-    <button class="action-btn" bindtap="handleResetView">居中</button>
+  <view class="zoom-slider-row brand-panel">
+    <view class="zoom-label">缩放</view>
+    <slider
+      class="zoom-slider"
+      min="50"
+      max="400"
+      step="1"
+      value="{{scalePercent}}"
+      activeColor="#ff3b5c"
+      backgroundColor="#e8ebf2"
+      block-color="#ff3b5c"
+      block-size="18"
+      bindchanging="handleScaleSliderChanging"
+      bindchange="handleScaleSliderChange"
+      show-value="false"
+    />
+    <input
+      class="zoom-input"
+      type="number"
+      value="{{scaleInputValue}}"
+      maxlength="3"
+      bindinput="handleScaleInput"
+      bindconfirm="handleScaleInputConfirm"
+      bindblur="handleScaleInputBlur"
+    />
+    <view class="zoom-unit">%</view>
   </view>
 
-  <view class="palette-panel brand-panel">
+  <view wx:if="{{viewMode === 'edit'}}" class="palette-panel brand-panel">
     <view class="palette-title">已用色</view>
     <scroll-view class="used-scroll" scroll-x="true" enable-flex="true">
       <view class="used-row">
@@ -82,10 +186,69 @@
     </scroll-view>
   </view>
 
+  <view wx:if="{{viewMode === 'bead'}}" class="bead-panel brand-panel">
+    <view class="bead-title">色号统计（共 {{beadStats.length}} 种颜色）</view>
+    <view class="bead-sub">点击色块或图纸内色块可高亮显示</view>
+    <scroll-view class="bead-scroll" scroll-x="true" enable-flex="true">
+      <view class="bead-row">
+        <block wx:for="{{beadStats}}" wx:key="index">
+          <view
+            class="bead-item {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handleSelectBeadColor"
+          >
+            <view class="bead-color" style="background: {{item.hex}};"></view>
+            <text class="bead-code">{{item.code}}</text>
+            <text class="bead-count">{{item.count}} 颗</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+  </view>
+
   <canvas
     canvas-id="exportCanvas"
     width="{{exportCanvasSize}}"
     height="{{exportCanvasSize}}"
     style="position: fixed; left: -9999px; top: -9999px; width: {{exportCanvasSize}}px; height: {{exportCanvasSize}}px;"
   ></canvas>
+
+  <view wx:if="{{showColorPicker}}" class="color-picker-mask" bindtap="handleCloseColorPicker">
+    <view class="color-picker-panel brand-panel" catchtap="noop">
+      <view class="color-picker-title">选择颜色</view>
+      <view class="color-picker-sub">已使用颜色</view>
+      <scroll-view class="color-picker-used-scroll" scroll-x="true" enable-flex="true">
+        <view class="used-row">
+          <block wx:for="{{usedPalette}}" wx:key="index">
+            <view
+              class="color-chip {{selectedColorIndex === item.index ? 'is-active' : ''}}"
+              data-index="{{item.index}}"
+              bindtap="handlePickColor"
+            >
+              <view class="color-dot" style="background: {{item.hex}};"></view>
+              <text class="color-code">{{item.code}}</text>
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+      <view class="color-picker-sub color-picker-sub-full">MARD 全量色卡</view>
+      <scroll-view class="color-picker-full-scroll" scroll-y="true" show-scrollbar="true">
+        <view class="full-grid">
+          <block wx:for="{{fullPalette}}" wx:key="index">
+            <view
+              class="full-item {{selectedColorIndex === item.index ? 'is-active' : ''}}"
+              data-index="{{item.index}}"
+              bindtap="handlePickColor"
+            >
+              <view class="full-dot" style="background: {{item.hex}};"></view>
+              <text class="full-code">{{item.code}}</text>
+            </view>
+          </block>
+        </view>
+      </scroll-view>
+      <view class="color-picker-footer">
+        <button class="color-picker-close-btn" bindtap="handleCloseColorPicker">关闭</button>
+      </view>
+    </view>
+  </view>
 </view>
