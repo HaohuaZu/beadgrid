@@ -544,8 +544,18 @@ Page({
       return;
     }
     const name = work ? encodeURIComponent(work.title) : "";
+    wx.showLoading({
+      title: "进入编辑器...",
+      mask: true
+    });
     wx.navigateTo({
-      url: `/pages/editor/index?workId=${workId || ""}&name=${name}`
+      url: `/pages/editor/index?workId=${workId || ""}&name=${name}`,
+      fail: () => {
+        wx.hideLoading();
+      },
+      complete: () => {
+        setTimeout(() => wx.hideLoading(), 80);
+      }
     });
   },
   handleDeleteWork(event) {

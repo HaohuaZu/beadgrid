@@ -11,6 +11,9 @@ const MAX_SCALE = 4;
 const MAX_CANVAS_EDGE = 960;
 const EDITOR_DATA_SCHEMA_VERSION = 3;
 const EDITOR_HINT_KEY = "bead_editor_gesture_hint_v1";
+const REMIXICON_FONT_FAMILY = "remixicon";
+const REMIXICON_FONT_URL = "https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.ttf";
+let remixIconFontReady = false;
 const TOOL_LABELS = {
   paint: "画笔",
   erase: "橡皮",
@@ -91,6 +94,7 @@ Page({
     canUndo: false,
     canRedo: false,
     historyText: "0 / 0",
+    iconFontReady: false,
     showMoveShapeOverlay: false,
     moveShapeDeltaText: "Δx 0 · Δy 0",
     usedPalette: [],
@@ -147,7 +151,6 @@ Page({
     this.setData({
       workId,
       workName,
-      fullPalette: this.palette,
       selectedColorIndex: 0,
       selectedColorCode: this.palette[0].code,
       selectedColorHex: this.palette[0].hex,
@@ -168,15 +171,50 @@ Page({
       canUndo: false,
       canRedo: false,
       historyText: "0 / 0",
+      iconFontReady: remixIconFontReady,
       showMoveShapeOverlay: false,
       moveShapeDeltaText: "Δx 0 · Δy 0"
     });
 
     this.loadWork(workId);
   },
+  ensureRemixIconFont() {
+    if (remixIconFontReady) {
+      this.setData({ iconFontReady: true });
+      return;
+    }
+    if (!wx || typeof wx.loadFontFace !== "function") return;
+    wx.loadFontFace({
+      family: REMIXICON_FONT_FAMILY,
+      source: `url("${REMIXICON_FONT_URL}")`,
+      global: true,
+      success: () => {
+        remixIconFontReady = true;
+        this.setData({ iconFontReady: true });
+      },
+      fail: () => {
+        this.setData({ iconFontReady: false });
+      }
+    });
+  },
   onReady() {
+    try {
+      wx.hideLoading();
+    } catch (error) {
+      // ignore
+    }
     this.measureCanvas();
     this.maybeShowEditorHint();
+    // Defer large palette data set to keep first-screen navigation smoother.
+    setTimeout(() => {
+      if (this.data.fullPalette.length !== this.palette.length) {
+        this.setData({ fullPalette: this.palette });
+      }
+    }, 24);
+    // Delay font loading until first paint to reduce perceived page-enter lag.
+    setTimeout(() => {
+      this.ensureRemixIconFont();
+    }, 40);
   },
   onPageScroll(event) {
     this.pageScrollTop = toNumber(event && event.scrollTop, this.pageScrollTop || 0);
@@ -677,7 +715,8 @@ Page({
     const editorVersion = Number(editorData && editorData.version) || 0;
     const isUserEdited = Boolean(editorData && editorData.userEdited);
     const detectedBroken = hasValidGrid ? this.looksShiftedToCorner(indexGridRaw, gridSize) : false;
-    const shouldTryPreviewRebuild = Boolean(work.previewImages && (!isUserEdited || detectedBroken));
+    // Heavy rebuild should only run when grid data is missing/broken, not on every open.
+    const shouldTryPreviewRebuild = Boolean(work.previewImages && (!hasValidGrid || detectedBroken));
     if (shouldTryPreviewRebuild) {
       const candidates = [
         work.previewImages.origin,

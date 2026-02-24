@@ -15,12 +15,18 @@
       class="mode-btn {{viewMode === 'edit' ? 'is-active' : ''}}"
       data-mode="edit"
       bindtap="handleSwitchViewMode"
-    >编辑模式</view>
+    >
+      <view class="{{iconFontReady ? 'mode-btn-icon iconfont ri-edit-2-line' : 'mode-btn-icon mode-btn-icon-fallback'}}">{{iconFontReady ? '' : '✎'}}</view>
+      <text>编辑模式</text>
+    </view>
     <view
       class="mode-btn {{viewMode === 'bead' ? 'is-active' : ''}}"
       data-mode="bead"
       bindtap="handleSwitchViewMode"
-    >拼豆模式</view>
+    >
+      <view class="{{iconFontReady ? 'mode-btn-icon iconfont ri-layout-grid-line' : 'mode-btn-icon mode-btn-icon-fallback'}}">{{iconFontReady ? '' : '▦'}}</view>
+      <text>拼豆模式</text>
+    </view>
   </view>
 
   <view class="status-row brand-panel">
@@ -38,12 +44,18 @@
         class="status-action-btn {{!canUndo ? 'is-disabled' : ''}}"
         disabled="{{!canUndo}}"
         bindtap="handleUndo"
-      >撤销</button>
+      >
+        <view class="{{iconFontReady ? 'status-action-icon iconfont ri-arrow-go-back-line' : 'status-action-icon status-action-icon-fallback'}}">{{iconFontReady ? '' : '↶'}}</view>
+        <text>撤销</text>
+      </button>
       <button
         class="status-action-btn {{!canRedo ? 'is-disabled' : ''}}"
         disabled="{{!canRedo}}"
         bindtap="handleRedo"
-      >重做</button>
+      >
+        <view class="{{iconFontReady ? 'status-action-icon iconfont ri-arrow-go-forward-line' : 'status-action-icon status-action-icon-fallback'}}">{{iconFontReady ? '' : '↷'}}</view>
+        <text>重做</text>
+      </button>
       <text class="status-history-text">{{historyText}}</text>
     </view>
   </view>
@@ -112,13 +124,34 @@
 
   <view class="view-tools-row brand-panel">
     <view class="view-tool-title">视图</view>
-    <view class="view-tool-chip {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">拖拽</view>
-    <view class="view-tool-chip {{currentTool === 'moveShape' ? 'is-active' : ''}}" data-tool="moveShape" bindtap="handleSwitchTool">移动图案</view>
-    <view class="view-tool-chip {{showGridLines ? 'is-active' : ''}}" data-action="toggleGrid" bindtap="handleQuickAction">网格</view>
-    <view class="view-tool-chip {{showColorCodeInEdit ? 'is-active' : ''}}" data-action="toggleColorCode" bindtap="handleQuickAction">色号</view>
-    <view class="view-tool-chip {{showLocatorLines ? 'is-active' : ''}}" data-action="toggleLocator" bindtap="handleQuickAction">定位线</view>
-    <view class="view-tool-chip" data-action="mirror" bindtap="handleQuickAction">镜像</view>
-    <view class="view-tool-chip" data-action="center" bindtap="handleQuickAction">居中</view>
+    <view class="view-tool-chip {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-drag-move-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '✥'}}</view>
+      <text>拖拽</text>
+    </view>
+    <view class="view-tool-chip {{currentTool === 'moveShape' ? 'is-active' : ''}}" data-tool="moveShape" bindtap="handleSwitchTool">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-3-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⤢'}}</view>
+      <text>移动图案</text>
+    </view>
+    <view class="view-tool-chip {{showGridLines ? 'is-active' : ''}}" data-action="toggleGrid" bindtap="handleQuickAction">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-grid-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '#'}}</view>
+      <text>网格</text>
+    </view>
+    <view class="view-tool-chip {{showColorCodeInEdit ? 'is-active' : ''}}" data-action="toggleColorCode" bindtap="handleQuickAction">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-hashtag' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◍'}}</view>
+      <text>色号</text>
+    </view>
+    <view class="view-tool-chip {{showLocatorLines ? 'is-active' : ''}}" data-action="toggleLocator" bindtap="handleQuickAction">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-crosshair-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⊞'}}</view>
+      <text>定位线</text>
+    </view>
+    <view class="view-tool-chip" data-action="mirror" bindtap="handleQuickAction">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-flip-horizontal-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⇋'}}</view>
+      <text>镜像</text>
+    </view>
+    <view class="view-tool-chip" data-action="center" bindtap="handleQuickAction">
+      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◎'}}</view>
+      <text>居中</text>
+    </view>
   </view>
   <view wx:if="{{viewMode === 'edit' && currentTool === 'moveShape'}}" class="move-shape-tip brand-panel">
     点击已填色格子后拖动，可整体移动图案
