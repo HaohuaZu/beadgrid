@@ -107,6 +107,7 @@ Page({
     this.lightDrawRequested = false;
     this.backgroundIndexSet = Object.create(null);
     this.hasManualEdits = false;
+    this.interactionMode = "";
 
     this.setData({
       workId,
@@ -397,8 +398,6 @@ Page({
       const rect = res && res[0] ? res[0] : null;
       if (!rect || !rect.width || !rect.height) return;
 
-      const sys = wx.getSystemInfoSync();
-      const ratio = sys.pixelRatio || 1;
       const canvasWidth = clamp(Math.floor(rect.width), 100, MAX_CANVAS_EDGE);
       const canvasHeight = clamp(Math.floor(rect.height), 100, MAX_CANVAS_EDGE);
 
@@ -422,6 +421,7 @@ Page({
   requestRedraw(lightMode = false) {
     if (!this.canvasReady) return;
     if (lightMode) this.lightDrawRequested = true;
+    else this.lightDrawRequested = false;
     if (this.redrawTimer) return;
 
     this.redrawTimer = setTimeout(() => {
@@ -429,7 +429,7 @@ Page({
       this.lightDrawRequested = false;
       this.redrawTimer = null;
       this.redrawCanvas(useLight);
-    }, 16);
+    }, 12);
   },
   getPaletteColor(index) {
     if (!Number.isFinite(index) || index < 0 || index >= this.palette.length) {
@@ -790,6 +790,7 @@ Page({
 
     const { drawCell, originX, originY, canvasWidth, canvasHeight } = this.getBoardMetrics();
     const ctx = wx.createCanvasContext("editorCanvas", this);
+    const dragLikeMode = lightMode && (this.interactionMode === "move" || this.interactionMode === "pinch");
 
     ctx.setFillStyle("#FFFFFF");
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -808,24 +809,33 @@ Page({
         }
       }
 
-      if (!lightMode && drawCell >= 4) {
-        for (let i = 0; i <= this.gridSize; i += 1) {
-          const p = i * drawCell;
-          const major = i % 5 === 0;
+      if (drawCell >= 4) {
+        if (!dragLikeMode) {
           ctx.beginPath();
-          ctx.setLineWidth(major ? 1.2 : 0.8);
-          ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
-          ctx.moveTo(originX + p, originY);
-          ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
-          ctx.stroke();
-
-          ctx.beginPath();
-          ctx.setLineWidth(major ? 1.2 : 0.8);
-          ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
-          ctx.moveTo(originX, originY + p);
-          ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+          for (let i = 0; i <= this.gridSize; i += 1) {
+            if (i % 5 === 0) continue;
+            const p = i * drawCell;
+            ctx.moveTo(originX + p, originY);
+            ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+            ctx.moveTo(originX, originY + p);
+            ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+          }
+          ctx.setLineWidth(0.8);
+          ctx.setStrokeStyle("rgba(31,36,48,0.18)");
           ctx.stroke();
         }
+
+        ctx.beginPath();
+        for (let i = 0; i <= this.gridSize; i += 5) {
+          const p = i * drawCell;
+          ctx.moveTo(originX + p, originY);
+          ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+          ctx.moveTo(originX, originY + p);
+          ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+        }
+        ctx.setLineWidth(1.2);
+        ctx.setStrokeStyle("rgba(31,36,48,0.32)");
+        ctx.stroke();
       }
     }
 
@@ -853,6 +863,71 @@ Page({
       index: row * this.gridSize + col
     };
   },
+  drawLiveChangedCells(changedCells) {
+    if (!this.canvasReady || !Array.isArray(changedCells) || !changedCells.length || !this.gridSize) return;
+    const { drawCell, originX, originY } = this.getBoardMetrics();
+    if (drawCell < 2) return;
+
+    const ctx = wx.createCanvasContext("editorCanvas", this);
+    const lineMarks = Object.create(null);
+    const markV = (xIndex, fromY, toY) => {
+      lineMarks[`v:${xIndex}:${fromY}:${toY}`] = { t: "v", xIndex, fromY, toY };
+    };
+    const markH = (yIndex, fromX, toX) => {
+      lineMarks[`h:${yIndex}:${fromX}:${toX}`] = { t: "h", yIndex, fromX, toX };
+    };
+
+    for (let i = 0; i < changedCells.length; i += 1) {
+      const cell = changedCells[i];
+      if (!cell) continue;
+      const col = Number(cell.col);
+      const row = Number(cell.row);
+      if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
+      if (col < 0 || row < 0 || col >= this.gridSize || row >= this.gridSize) continue;
+
+      const index = row * this.gridSize + col;
+      const color = this.cellColorByIndex(this.gridIndexes[index]);
+      const x = originX + col * drawCell;
+      const y = originY + row * drawCell;
+      ctx.setFillStyle(color);
+      ctx.fillRect(x, y, drawCell, drawCell);
+
+      markV(col, row, row + 1);
+      markV(col + 1, row, row + 1);
+      markH(row, col, col + 1);
+      markH(row + 1, col, col + 1);
+    }
+
+    const lines = Object.keys(lineMarks).map((key) => lineMarks[key]);
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (line.t === "v") {
+        const x = originX + line.xIndex * drawCell;
+        const y1 = originY + line.fromY * drawCell;
+        const y2 = originY + line.toY * drawCell;
+        const major = line.xIndex % 5 === 0;
+        ctx.beginPath();
+        ctx.setLineWidth(major ? 1.2 : 0.8);
+        ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
+        ctx.moveTo(x, y1);
+        ctx.lineTo(x, y2);
+        ctx.stroke();
+      } else {
+        const y = originY + line.yIndex * drawCell;
+        const x1 = originX + line.fromX * drawCell;
+        const x2 = originX + line.toX * drawCell;
+        const major = line.yIndex % 5 === 0;
+        ctx.beginPath();
+        ctx.setLineWidth(major ? 1.2 : 0.8);
+        ctx.setStrokeStyle(major ? "rgba(31,36,48,0.32)" : "rgba(31,36,48,0.18)");
+        ctx.moveTo(x1, y);
+        ctx.lineTo(x2, y);
+        ctx.stroke();
+      }
+    }
+
+    ctx.draw(true);
+  },
   applyScaleWithAnchor(nextScale, anchorCanvasPoint, anchorBoardX, anchorBoardY) {
     const safeScale = clamp(nextScale, MIN_SCALE, MAX_SCALE);
     const baseCell = this.getBaseCell();
@@ -870,7 +945,7 @@ Page({
     this.offsetY = originY - centerOriginY;
     this.updateScaleText();
   },
-  applyColorToCell(col, row, colorIndex, changesMap = null) {
+  applyColorToCell(col, row, colorIndex, changesMap = null, changedCells = null) {
     if (!this.gridSize) return false;
     if (col < 0 || row < 0 || col >= this.gridSize || row >= this.gridSize) return false;
     const index = row * this.gridSize + col;
@@ -881,9 +956,12 @@ Page({
       changesMap[index] = previous;
     }
     this.gridIndexes[index] = safeColor;
+    if (Array.isArray(changedCells)) {
+      changedCells.push({ col, row });
+    }
     return true;
   },
-  applyLineColor(fromCol, fromRow, toCol, toRow, colorIndex, changesMap = null) {
+  applyLineColor(fromCol, fromRow, toCol, toRow, colorIndex, changesMap = null, changedCells = null) {
     let changed = false;
     let x0 = fromCol;
     let y0 = fromRow;
@@ -896,7 +974,7 @@ Page({
     let err = dx + dy;
 
     while (true) {
-      if (this.applyColorToCell(x0, y0, colorIndex, changesMap)) changed = true;
+      if (this.applyColorToCell(x0, y0, colorIndex, changesMap, changedCells)) changed = true;
       if (x0 === x1 && y0 === y1) break;
       const e2 = 2 * err;
       if (e2 >= dy) {
@@ -1022,6 +1100,7 @@ Page({
         anchorBoardX: (mid.x - originX) / drawCell,
         anchorBoardY: (mid.y - originY) / drawCell
       };
+      this.interactionMode = "pinch";
       return;
     }
 
@@ -1035,6 +1114,7 @@ Page({
         startOffsetX: this.offsetX,
         startOffsetY: this.offsetY
       };
+      this.interactionMode = "move";
       return;
     }
 
@@ -1059,7 +1139,8 @@ Page({
 
     const paintIndex = this.data.currentTool === "erase" ? -1 : this.data.selectedColorIndex;
     const changes = Object.create(null);
-    const changed = this.applyColorToCell(cell.col, cell.row, paintIndex, changes);
+    const changedCells = [];
+    const changed = this.applyColorToCell(cell.col, cell.row, paintIndex, changes, changedCells);
     this.touchState = {
       type: "paint",
       paintIndex,
@@ -1068,10 +1149,10 @@ Page({
       hasChanged: changed,
       changes
     };
+    this.interactionMode = "paint";
 
     if (changed) {
-      this.refreshUsedPalette();
-      this.requestRedraw(true);
+      this.drawLiveChangedCells(changedCells);
     }
   },
   handleCanvasTouchMove(event) {
@@ -1086,6 +1167,7 @@ Page({
       if (!nextDistance || !this.touchState.startDistance) return;
       const ratio = nextDistance / this.touchState.startDistance;
       const nextScale = this.touchState.startScale * ratio;
+      if (Math.abs(nextScale - this.scale) < 0.01) return;
       const mid = {
         x: (p1.x + p2.x) / 2,
         y: (p1.y + p2.y) / 2
@@ -1107,13 +1189,17 @@ Page({
     if (this.touchState.type === "move") {
       const dx = point.x - this.touchState.startPoint.x;
       const dy = point.y - this.touchState.startPoint.y;
-      this.offsetX = this.touchState.startOffsetX + dx;
-      this.offsetY = this.touchState.startOffsetY + dy;
+      const nextOffsetX = this.touchState.startOffsetX + dx;
+      const nextOffsetY = this.touchState.startOffsetY + dy;
+      if (Math.abs(nextOffsetX - this.offsetX) < 0.8 && Math.abs(nextOffsetY - this.offsetY) < 0.8) return;
+      this.offsetX = nextOffsetX;
+      this.offsetY = nextOffsetY;
       this.requestRedraw(true);
       return;
     }
 
     if (this.touchState.type === "paint") {
+      const changedCells = [];
       const cell = this.pointToCell(point);
       if (!cell) return;
       if (cell.col === this.touchState.lastCol && cell.row === this.touchState.lastRow) return;
@@ -1123,23 +1209,25 @@ Page({
         cell.col,
         cell.row,
         this.touchState.paintIndex,
-        this.touchState.changes
+        this.touchState.changes,
+        changedCells
       );
       this.touchState.lastCol = cell.col;
       this.touchState.lastRow = cell.row;
       this.touchState.hasChanged = this.touchState.hasChanged || changed;
       if (changed) {
-        this.refreshUsedPalette();
-        this.requestRedraw(true);
+        this.drawLiveChangedCells(changedCells);
       }
     }
   },
   handleCanvasTouchEnd() {
     if (this.touchState && this.touchState.type === "paint" && this.touchState.hasChanged) {
       this.commitStrokeChanges(this.touchState.changes);
+      this.refreshUsedPalette();
       this.schedulePersist();
     }
     this.touchState = null;
+    this.interactionMode = "";
     this.requestRedraw(false);
   },
   handleZoomTap(event) {
