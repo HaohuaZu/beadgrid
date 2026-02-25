@@ -3,7 +3,8 @@
     "pages/home/index",
     "pages/my/index",
     "pages/profile/index",
-    "pages/editor/index"
+    "pages/editor/index",
+    "pages/bead/index"
   ],
   "window": {
     "backgroundTextStyle": "light",

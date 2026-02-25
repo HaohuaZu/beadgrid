@@ -6,8 +6,10 @@ const STORAGE_KEY = "bead_work_library_v1";
 const BACKUP_STORAGE_KEY = "bead_work_library_backup_v1";
 const LEGACY_STORAGE_KEY = "bead_work_library_v0";
 const MAX_UNDO_STEPS = 25;
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 4;
+const MIN_PATTERN_EDGE = 10;
+const MAX_PATTERN_EDGE = 200;
+const EDGE_PRESET_LIST = [36, 52, 72, 104, 156, 200];
+
 const MAX_CANVAS_EDGE = 960;
 const EDITOR_DATA_SCHEMA_VERSION = 3;
 const EDITOR_HINT_KEY = "bead_editor_gesture_hint_v1";
@@ -22,6 +24,25 @@ const TOOL_LABELS = {
   moveShape: "移动图案",
   bucket: "油漆桶"
 };
+
+function parseHexRgb(hex) {
+  const raw = String(hex || "").replace("#", "").trim();
+  if (raw.length !== 6) return { r: 255, g: 255, b: 255 };
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
+    return { r: 255, g: 255, b: 255 };
+  }
+  return { r, g, b };
+}
+
+function distanceSqRgb(a, b) {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -39,6 +60,15 @@ function parseGridSizeFromText(sizeText) {
   const height = Number(matched[2]) || 0;
   if (!width || !height || width !== height) return 0;
   return width;
+}
+
+function parseSizePairFromText(sizeText) {
+  const matched = String(sizeText || "").match(/(\d+)\s*[x×*]\s*(\d+)/i);
+  if (!matched) return null;
+  const width = Number(matched[1]) || 0;
+  const height = Number(matched[2]) || 0;
+  if (!width || !height) return null;
+  return { width, height };
 }
 
 function distance(a, b) {
@@ -91,6 +121,13 @@ Page({
     showColorPicker: false,
     beadHighlightIndex: -1,
     beadStats: [],
+    showAllBeadStats: false,
+    patternMaxEdge: 0,
+    selectedEditorMaxEdge: "52",
+    customEditorMaxEdge: "",
+    maxEdgeError: "",
+    showEdgePicker: false,
+    edgePresetList: EDGE_PRESET_LIST.map((value) => ({ value: String(value), label: String(value) })),
     canUndo: false,
     canRedo: false,
     historyText: "0 / 0",
@@ -111,7 +148,10 @@ Page({
         index,
         code: item.code || `C${index + 1}`,
         hex: String(item.hex || "#FFFFFF").toUpperCase(),
-        order: toNumber(item.order, index + 1)
+        order: toNumber(item.order, index + 1),
+        rgb: item && item.rgb && Number.isFinite(item.rgb.r)
+          ? { r: item.rgb.r, g: item.rgb.g, b: item.rgb.b }
+          : parseHexRgb(item && item.hex)
       }));
 
     if (!this.palette.length) {
@@ -147,6 +187,10 @@ Page({
     this.lastScaleUiSyncAt = 0;
     this.beadCellLabels = [];
     this.wheelHintShown = false;
+    this.resizeMaster = null;
+    this.resizeSourceImagePath = "";
+    this.sourceResizeBusy = false;
+    this.pendingSourceMaxEdge = null;
 
     this.setData({
       workId,
@@ -288,7 +332,7 @@ Page({
       this.setData({ showColorPicker: false });
     }
   },
-  noop() {},
+  noop() { },
   handleSwitchViewMode(event) {
     const mode = event.currentTarget.dataset.mode === "bead" ? "bead" : "edit";
     if (mode === this.data.viewMode) return;
@@ -318,7 +362,19 @@ Page({
   handleSelectBeadColor(event) {
     const index = toNumber(event.currentTarget.dataset.index, -1);
     if (index < 0) return;
+    // In edit mode, also switch the paint color to the tapped stat color
+    if (this.data.viewMode === "edit") {
+      const color = this.getPaletteColor(index);
+      this.setData({
+        selectedColorIndex: index,
+        selectedColorCode: color.code,
+        selectedColorHex: color.hex
+      });
+    }
     this.toggleBeadHighlight(index);
+  },
+  handleToggleBeadStats() {
+    this.setData({ showAllBeadStats: !this.data.showAllBeadStats });
   },
   computeBeadStatsAndLabels() {
     const total = this.gridSize * this.gridSize;
@@ -498,7 +554,8 @@ Page({
 
     const direction = deltaY > 0 ? -1 : 1;
     const step = this.scale >= 2 ? 0.1 : 0.14;
-    const nextScale = clamp(this.scale + direction * step, MIN_SCALE, MAX_SCALE);
+    const { minScale, maxScale } = this.getScaleLimits();
+    const nextScale = clamp(this.scale + direction * step, minScale, maxScale);
     if (nextScale === this.scale) return;
 
     const anchorPoint = this.getWheelAnchorCanvasPoint(event);
@@ -618,6 +675,49 @@ Page({
       return Number.isFinite(mapped) ? mapped : 0;
     });
   },
+  async buildResizeSourceFromImage(imagePath, targetMaxEdge) {
+    if (!imagePath) return null;
+    const effectiveTarget = clamp(parseInt(targetMaxEdge, 10) || 0, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
+    if (!effectiveTarget) return null;
+    const processingEdge = clamp(effectiveTarget * 2, effectiveTarget, 400);
+    let sourceWidth = processingEdge;
+    let sourceHeight = processingEdge;
+    try {
+      const imageInfo = await this.getImageInfo(imagePath);
+      sourceWidth = Number(imageInfo && imageInfo.width) || processingEdge;
+      sourceHeight = Number(imageInfo && imageInfo.height) || processingEdge;
+    } catch (error) {
+      return null;
+    }
+
+    const srcRatio = sourceWidth / Math.max(1, sourceHeight);
+    let drawWidth = processingEdge;
+    let drawHeight = processingEdge;
+    if (srcRatio >= 1) {
+      drawWidth = processingEdge;
+      drawHeight = Math.max(1, Math.round(processingEdge / Math.max(1e-6, srcRatio)));
+    } else {
+      drawHeight = processingEdge;
+      drawWidth = Math.max(1, Math.round(processingEdge * srcRatio));
+    }
+    const drawX = Math.floor((processingEdge - drawWidth) / 2);
+    const drawY = Math.floor((processingEdge - drawHeight) / 2);
+
+    await this.setDataAsync({ exportCanvasSize: processingEdge });
+    await this.drawCanvasAsync("exportCanvas", (ctx) => {
+      ctx.setFillStyle("#FFFFFF");
+      ctx.fillRect(0, 0, processingEdge, processingEdge);
+      ctx.drawImage(imagePath, drawX, drawY, drawWidth, drawHeight);
+    });
+    const sampled = await this.canvasGetImageDataAsync("exportCanvas", processingEdge, processingEdge);
+    const quantized = quantizeToPalette(sampled.data);
+    const indexGrid = quantized.hexGrid.map((hex) => {
+      const key = String(hex || "").toUpperCase();
+      const mapped = this.paletteIndexByHex[key];
+      return Number.isFinite(mapped) ? mapped : 0;
+    });
+    return this.buildResizeSourceFromGrid(indexGrid, processingEdge);
+  },
   persistMigratedEditorData(workId, gridSize, indexGrid, originalWork) {
     if (!workId || !gridSize || !Array.isArray(indexGrid) || !indexGrid.length) return;
     const workLibrary = this.readWorkLibrary();
@@ -694,6 +794,10 @@ Page({
       this.setData({ hasEditableGrid: false });
       return;
     }
+    this.resizeSourceImagePath = (
+      (work.previewImages && (work.previewImages.ai || work.previewImages.origin || work.previewImages.grid))
+      || ""
+    );
 
     const editorData = work.editorData && typeof work.editorData === "object" ? work.editorData : null;
     const gridSize = toNumber(editorData && editorData.gridSize) || parseGridSizeFromText(work.size);
@@ -759,6 +863,7 @@ Page({
     this.gridSize = gridSize;
     this.gridIndexes = this.recenterLegacyGrid(indexGridRaw.slice(0, total), gridSize);
     this.backgroundIndexSet = this.computeBackgroundIndexSet();
+    this.rebuildResizeMasterFromCurrent();
     this.hasManualEdits = false;
     this.undoStack = [];
     this.redoStack = [];
@@ -766,14 +871,26 @@ Page({
     const used = this.computeUsedColorIndexes();
     const initialColor = used.length ? used[0] : 0;
 
+    // Compute initial pattern max edge from content bounding box
+    const initialMaxEdge = this.computePatternMaxEdge();
+    const displaySizeText = this.getPatternSizeText();
+
+    const initialEdgeText = String(initialMaxEdge || 0);
+    const initialPreset = EDGE_PRESET_LIST.map(String).includes(initialEdgeText)
+      ? initialEdgeText
+      : "custom";
     this.setData({
       workName: work.title || this.data.workName,
-      gridSizeText: `${gridSize}×${gridSize}`,
+      gridSizeText: displaySizeText,
       hasEditableGrid: true,
       usedPalette: this.buildPaletteByIndexes(used),
       selectedColorIndex: initialColor,
       selectedColorCode: this.getPaletteColor(initialColor).code,
-      selectedColorHex: this.getPaletteColor(initialColor).hex
+      selectedColorHex: this.getPaletteColor(initialColor).hex,
+      patternMaxEdge: initialMaxEdge,
+      selectedEditorMaxEdge: initialPreset,
+      customEditorMaxEdge: initialPreset === "custom" ? initialEdgeText : "",
+      maxEdgeError: ""
     });
 
     this.centerByGridCenter(1);
@@ -781,8 +898,14 @@ Page({
     if (this.canvasReady) {
       this.requestRedraw(false);
     }
-    this.refreshBeadMetrics();
     this.syncHistoryState();
+    setTimeout(() => {
+      if (!this.data.hasEditableGrid) return;
+      this.refreshBeadMetrics();
+      if (this.data.viewMode === "bead") {
+        this.requestRedraw(false);
+      }
+    }, 0);
   },
   measureCanvas() {
     const query = this.createSelectorQuery();
@@ -881,7 +1004,8 @@ Page({
     }, Math.max(200, delay));
   },
   centerByGridCenter(scale = 1) {
-    const safeScale = clamp(scale, MIN_SCALE, MAX_SCALE);
+    const { minScale, maxScale } = this.getScaleLimits();
+    const safeScale = clamp(scale, minScale, maxScale);
     this.scale = safeScale;
     this.offsetX = 0;
     this.offsetY = 0;
@@ -890,23 +1014,79 @@ Page({
   getBaseCell() {
     const canvasWidth = this.data.canvasWidth;
     const canvasHeight = this.data.canvasHeight;
-    const safeGrid = this.gridSize || 1;
+    const bounds = this.getDisplayBounds();
+    const safeGrid = Math.max(1, Math.max(bounds.cols, bounds.rows));
     return Math.max(4, Math.floor((Math.min(canvasWidth, canvasHeight) - 24) / safeGrid));
+  },
+  getScaleLimits() {
+    const baseCell = this.getBaseCell();
+    const canvasEdge = Math.min(this.data.canvasWidth, this.data.canvasHeight);
+    const maxScale = Math.max(1, canvasEdge / (baseCell * 3));
+    return { minScale: 0.8, maxScale };
+  },
+  clampOffset() {
+    const { canvasWidth, canvasHeight } = this.data;
+    const bounds = this.getDisplayBounds();
+    const baseCell = this.getBaseCell();
+    const drawCell = Math.max(2, baseCell * this.scale);
+    const boardWidth = drawCell * bounds.cols;
+    const boardHeight = drawCell * bounds.rows;
+    const keepX = Math.min(boardWidth * 0.7, canvasWidth * 0.7);
+    const keepY = Math.min(boardHeight * 0.7, canvasHeight * 0.7);
+    const maxOX = (canvasWidth + boardWidth) / 2 - keepX;
+    const maxOY = (canvasHeight + boardHeight) / 2 - keepY;
+    this.offsetX = clamp(this.offsetX, -maxOX, maxOX);
+    this.offsetY = clamp(this.offsetY, -maxOY, maxOY);
+  },
+  getDisplayBounds() {
+    const size = this.gridSize || 0;
+    if (!size || !Array.isArray(this.gridIndexes) || !this.gridIndexes.length) {
+      return {
+        minCol: 0,
+        minRow: 0,
+        maxCol: Math.max(0, size - 1),
+        maxRow: Math.max(0, size - 1),
+        cols: Math.max(1, size || 1),
+        rows: Math.max(1, size || 1)
+      };
+    }
+    const bounds = this.computeContentBounds();
+    if (!bounds) {
+      return {
+        minCol: 0,
+        minRow: 0,
+        maxCol: size - 1,
+        maxRow: size - 1,
+        cols: size,
+        rows: size
+      };
+    }
+    return {
+      minCol: bounds.minCol,
+      minRow: bounds.minRow,
+      maxCol: bounds.maxCol,
+      maxRow: bounds.maxRow,
+      cols: bounds.maxCol - bounds.minCol + 1,
+      rows: bounds.maxRow - bounds.minRow + 1
+    };
   },
   getBoardMetrics(scale = this.scale, offsetX = this.offsetX, offsetY = this.offsetY) {
     const canvasWidth = this.data.canvasWidth;
     const canvasHeight = this.data.canvasHeight;
-    const safeGrid = this.gridSize || 1;
+    const bounds = this.getDisplayBounds();
     const baseCell = this.getBaseCell();
     const drawCell = Math.max(2, baseCell * scale);
-    const boardSize = drawCell * safeGrid;
-    const originX = (canvasWidth - boardSize) / 2 + offsetX;
-    const originY = (canvasHeight - boardSize) / 2 + offsetY;
+    const boardWidth = drawCell * bounds.cols;
+    const boardHeight = drawCell * bounds.rows;
+    const originX = (canvasWidth - boardWidth) / 2 + offsetX;
+    const originY = (canvasHeight - boardHeight) / 2 + offsetY;
     return {
       drawCell,
-      boardSize,
+      boardWidth,
+      boardHeight,
       originX,
       originY,
+      bounds,
       canvasWidth,
       canvasHeight
     };
@@ -994,6 +1174,407 @@ Page({
     }
     return output;
   },
+  computePatternMaxEdge() {
+    const size = this.gridSize;
+    if (!size || !Array.isArray(this.gridIndexes) || !this.gridIndexes.length) return size || 0;
+    const bounds = this.computePrimaryContentBounds() || this.computeContentBounds();
+    if (!bounds) return 0;
+    const contentWidth = bounds.maxCol - bounds.minCol + 1;
+    const contentHeight = bounds.maxRow - bounds.minRow + 1;
+    return Math.max(contentWidth, contentHeight, 0);
+  },
+  getPatternSizeFromBounds(bounds) {
+    if (!bounds) {
+      const fallback = Math.max(1, this.gridSize || 0);
+      return { width: fallback, height: fallback };
+    }
+    return {
+      width: Math.max(1, bounds.maxCol - bounds.minCol + 1),
+      height: Math.max(1, bounds.maxRow - bounds.minRow + 1)
+    };
+  },
+  getPatternSizeText() {
+    const bounds = this.computePrimaryContentBounds() || this.computeContentBounds();
+    const { width, height } = this.getPatternSizeFromBounds(bounds);
+    return `${width}×${height}`;
+  },
+  openCustomEdgeInputModal() {
+    const pair = parseSizePairFromText(this.data.gridSizeText || "");
+    const fallbackEdge = Math.max(
+      Number(pair && pair.width) || 0,
+      Number(pair && pair.height) || 0,
+      Number(this.data.patternMaxEdge) || 0,
+      this.gridSize || 0,
+      MIN_PATTERN_EDGE
+    );
+    wx.showModal({
+      title: "设置图案最大边长",
+      content: "",
+      editable: true,
+      placeholderText: `请输入${MIN_PATTERN_EDGE}-${MAX_PATTERN_EDGE}`,
+      confirmText: "应用",
+      success: ({ confirm, content }) => {
+        if (!confirm) return;
+        let val = parseInt(String(content || "").trim(), 10);
+        if (!Number.isFinite(val)) {
+          val = clamp(fallbackEdge, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
+        }
+        if (val < MIN_PATTERN_EDGE || val > MAX_PATTERN_EDGE) {
+          wx.showToast({
+            title: `请输入${MIN_PATTERN_EDGE}-${MAX_PATTERN_EDGE}的整数`,
+            icon: "none"
+          });
+          return;
+        }
+        this.setData({
+          selectedEditorMaxEdge: EDGE_PRESET_LIST.includes(val) ? String(val) : "custom",
+          customEditorMaxEdge: EDGE_PRESET_LIST.includes(val) ? "" : String(val),
+          maxEdgeError: "",
+          showEdgePicker: false
+        });
+        this.applyMaxEdgeChange(val);
+      },
+      fail: () => {
+        wx.showToast({ title: "当前版本暂不支持输入边长", icon: "none" });
+      }
+    });
+  },
+  handleTapSizeChip() {
+    if (!this.data.hasEditableGrid) return;
+    this.closeEraserMenu();
+    this.setData({ showEdgePicker: true });
+  },
+  handleCloseEdgePicker() {
+    if (!this.data.showEdgePicker) return;
+    this.setData({ showEdgePicker: false });
+  },
+  handleSelectEdgePreset(event) {
+    const edge = parseInt(event.currentTarget.dataset.edge, 10);
+    if (!Number.isFinite(edge)) return;
+    this.setData({
+      selectedEditorMaxEdge: String(edge),
+      customEditorMaxEdge: "",
+      maxEdgeError: "",
+      showEdgePicker: false
+    });
+    this.applyMaxEdgeChange(edge);
+  },
+  handleOpenCustomEdgeInput() {
+    this.openCustomEdgeInputModal();
+  },
+  handleSelectEditorMaxEdge(event) {
+    const mode = event.currentTarget.dataset.mode;
+    if (!mode) return;
+    this.setData({ selectedEditorMaxEdge: mode, maxEdgeError: "" });
+    if (mode !== "custom") {
+      const newMaxEdge = parseInt(mode, 10);
+      if (Number.isFinite(newMaxEdge) && newMaxEdge > 0) {
+        this.applyMaxEdgeChange(newMaxEdge);
+      }
+    }
+  },
+  handleCustomEditorMaxEdgeInput(event) {
+    this.setData({ customEditorMaxEdge: event.detail.value || "", maxEdgeError: "" });
+  },
+  handleApplyCustomMaxEdge() {
+    const val = parseInt(this.data.customEditorMaxEdge, 10);
+    if (!Number.isFinite(val) || val < MIN_PATTERN_EDGE || val > MAX_PATTERN_EDGE) {
+      this.setData({ maxEdgeError: `请输入${MIN_PATTERN_EDGE}-${MAX_PATTERN_EDGE}的整数` });
+      return;
+    }
+    this.applyMaxEdgeChange(val);
+  },
+  resampleIndexGridSmart(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight, bgIndex) {
+    const output = new Array(targetWidth * targetHeight);
+    const upscale = targetWidth >= sourceWidth && targetHeight >= sourceHeight;
+    const candidateSet = Object.create(null);
+    candidateSet[String(bgIndex)] = true;
+    for (let i = 0; i < sourceGrid.length; i += 1) {
+      const idx = sourceGrid[i];
+      if (!Number.isFinite(idx) || idx < 0) continue;
+      candidateSet[String(idx)] = true;
+    }
+    const candidates = Object.keys(candidateSet)
+      .map((key) => Number(key))
+      .filter((idx) => Number.isFinite(idx) && idx >= 0 && idx < this.palette.length);
+
+    if (upscale) {
+      for (let row = 0; row < targetHeight; row += 1) {
+        const srcRow = Math.min(sourceHeight - 1, Math.floor(row * sourceHeight / targetHeight));
+        for (let col = 0; col < targetWidth; col += 1) {
+          const srcCol = Math.min(sourceWidth - 1, Math.floor(col * sourceWidth / targetWidth));
+          output[row * targetWidth + col] = sourceGrid[srcRow * sourceWidth + srcCol];
+        }
+      }
+      return output;
+    }
+
+    for (let row = 0; row < targetHeight; row += 1) {
+      const sy0 = row * sourceHeight / targetHeight;
+      const sy1 = (row + 1) * sourceHeight / targetHeight;
+      const yStart = Math.floor(sy0);
+      let yEnd = Math.ceil(sy1) - 1;
+      if (yEnd < yStart) yEnd = yStart;
+      for (let col = 0; col < targetWidth; col += 1) {
+        const sx0 = col * sourceWidth / targetWidth;
+        const sx1 = (col + 1) * sourceWidth / targetWidth;
+        const xStart = Math.floor(sx0);
+        let xEnd = Math.ceil(sx1) - 1;
+        if (xEnd < xStart) xEnd = xStart;
+
+        let fgWeight = 0;
+        let bgWeight = 0;
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        const colorWeights = Object.create(null);
+
+        for (let sy = yStart; sy <= yEnd; sy += 1) {
+          for (let sx = xStart; sx <= xEnd; sx += 1) {
+            const overlapX = Math.max(0, Math.min(sx + 1, sx1) - Math.max(sx, sx0));
+            const overlapY = Math.max(0, Math.min(sy + 1, sy1) - Math.max(sy, sy0));
+            const weight = overlapX * overlapY;
+            if (weight <= 0) continue;
+
+            const idx = sourceGrid[sy * sourceWidth + sx];
+            if (!Number.isFinite(idx) || idx < 0 || idx === bgIndex || this.isBackgroundCell(idx)) {
+              bgWeight += weight;
+              continue;
+            }
+            const rgb = (this.getPaletteColor(idx) && this.getPaletteColor(idx).rgb) || { r: 255, g: 255, b: 255 };
+            fgWeight += weight;
+            sumR += rgb.r * weight;
+            sumG += rgb.g * weight;
+            sumB += rgb.b * weight;
+            const key = String(idx);
+            colorWeights[key] = (colorWeights[key] || 0) + weight;
+          }
+        }
+
+        const totalWeight = fgWeight + bgWeight;
+        const fgCoverage = totalWeight > 0 ? (fgWeight / totalWeight) : 0;
+        if (fgWeight <= 0 || fgCoverage < 0.18) {
+          output[row * targetWidth + col] = bgIndex;
+          continue;
+        }
+
+        let targetRgb = {
+          r: sumR / fgWeight,
+          g: sumG / fgWeight,
+          b: sumB / fgWeight
+        };
+        const centerSrcX = Math.min(sourceWidth - 1, Math.max(0, Math.floor((sx0 + sx1) / 2)));
+        const centerSrcY = Math.min(sourceHeight - 1, Math.max(0, Math.floor((sy0 + sy1) / 2)));
+        const centerIndex = sourceGrid[centerSrcY * sourceWidth + centerSrcX];
+        const centerSupport = colorWeights[String(centerIndex)] || 0;
+        if (Number.isFinite(centerIndex) && centerIndex >= 0 && centerIndex !== bgIndex && centerSupport > 0 && fgCoverage < 0.45) {
+          output[row * targetWidth + col] = centerIndex;
+          continue;
+        }
+        if (Number.isFinite(centerIndex) && centerIndex >= 0 && centerIndex !== bgIndex && !this.isBackgroundCell(centerIndex)) {
+          const centerRgb = (this.getPaletteColor(centerIndex) && this.getPaletteColor(centerIndex).rgb) || targetRgb;
+          targetRgb = {
+            r: targetRgb.r * 0.72 + centerRgb.r * 0.28,
+            g: targetRgb.g * 0.72 + centerRgb.g * 0.28,
+            b: targetRgb.b * 0.72 + centerRgb.b * 0.28
+          };
+        }
+
+        let best = bgIndex;
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < candidates.length; i += 1) {
+          const idx = candidates[i];
+          if (idx === bgIndex) continue;
+          const color = this.getPaletteColor(idx);
+          const rgb = color && color.rgb ? color.rgb : parseHexRgb(color && color.hex);
+          const dist = distanceSqRgb(targetRgb, rgb);
+          const support = colorWeights[String(idx)] || 0;
+          const centerBonus = idx === centerIndex ? 0.16 : 0;
+          const score = dist - support * 2200 - centerBonus * 1800;
+          if (score < bestScore) {
+            bestScore = score;
+            best = idx;
+          }
+        }
+        output[row * targetWidth + col] = Number.isFinite(best) ? best : bgIndex;
+      }
+    }
+    return output;
+  },
+  buildResizeSourceFromGrid(indexGrid, size) {
+    if (!Array.isArray(indexGrid) || !size || indexGrid.length < size * size) return null;
+    const resizeBgSet = this.buildResizeBackgroundSet(indexGrid, size);
+    const isResizeBackground = (idx) => {
+      if (!Number.isFinite(idx) || idx < 0) return true;
+      if (resizeBgSet[String(idx)]) return true;
+      if (this.isNearWhiteByIndex(idx)) return true;
+      return false;
+    };
+    const region = this.computePrimaryContentRegion(indexGrid, size, isResizeBackground);
+    const bounds = region && region.bounds
+      ? region.bounds
+      : this.computeGridContentBoundsWithChecker(indexGrid, size, isResizeBackground);
+    if (!bounds) return null;
+
+    const width = bounds.maxCol - bounds.minCol + 1;
+    const height = bounds.maxRow - bounds.minRow + 1;
+    const bgIndex = this.getBackgroundFillIndex();
+    const rectGrid = new Array(width * height).fill(bgIndex);
+    const regionMask = region && region.mask ? region.mask : null;
+    for (let row = 0; row < height; row += 1) {
+      for (let col = 0; col < width; col += 1) {
+        const srcIndex = (bounds.minRow + row) * size + (bounds.minCol + col);
+        const color = indexGrid[srcIndex];
+        if (regionMask && !regionMask[srcIndex]) continue;
+        if (isResizeBackground(color)) continue;
+        rectGrid[row * width + col] = color;
+      }
+    }
+
+    return {
+      rectGrid,
+      width,
+      height,
+      bgIndex
+    };
+  },
+  rebuildResizeMasterFromCurrent() {
+    this.resizeMaster = this.buildResizeSourceFromGrid(this.gridIndexes, this.gridSize);
+  },
+  applyMaxEdgeChange(newMaxEdge, options = {}) {
+    const parsedEdge = parseInt(newMaxEdge, 10);
+    if (!Number.isFinite(parsedEdge)) return;
+    if (parsedEdge < MIN_PATTERN_EDGE || parsedEdge > MAX_PATTERN_EDGE) {
+      this.setData({ maxEdgeError: `边长范围为 ${MIN_PATTERN_EDGE}-${MAX_PATTERN_EDGE}` });
+      return;
+    }
+    const fromSource = Boolean(options && options.fromSource);
+    if (!fromSource && !this.hasManualEdits && this.resizeSourceImagePath) {
+      this.pendingSourceMaxEdge = parsedEdge;
+      if (this.sourceResizeBusy) return;
+      this.sourceResizeBusy = true;
+      wx.showLoading({ title: "按原图重算中...", mask: true });
+      const run = async () => {
+        while (Number.isFinite(this.pendingSourceMaxEdge)) {
+          const nextEdge = this.pendingSourceMaxEdge;
+          this.pendingSourceMaxEdge = null;
+          try {
+            const source = await this.buildResizeSourceFromImage(this.resizeSourceImagePath, nextEdge);
+            if (source) {
+              this.resizeMaster = source;
+            }
+            this.applyMaxEdgeChange(nextEdge, { fromSource: true });
+          } catch (error) {
+            this.applyMaxEdgeChange(nextEdge, { fromSource: true });
+          }
+        }
+      };
+      run().finally(() => {
+        this.sourceResizeBusy = false;
+        try {
+          wx.hideLoading();
+        } catch (error) {
+          // ignore
+        }
+      });
+      return;
+    }
+
+    const gridSize = this.gridSize;
+    if (!gridSize || !Array.isArray(this.gridIndexes)) return;
+    newMaxEdge = parsedEdge;
+
+    const source = this.resizeMaster || this.buildResizeSourceFromGrid(this.gridIndexes, gridSize);
+    if (!source) {
+      this.setData({ patternMaxEdge: newMaxEdge, maxEdgeError: "" });
+      return;
+    }
+    const contentWidth = source.width;
+    const contentHeight = source.height;
+    const currentMaxEdge = Math.max(contentWidth, contentHeight, 1);
+    // 只有“图案边长”和“底稿尺寸”都已匹配时才短路；否则继续重采样，确保36/52切换必生效。
+    if (currentMaxEdge === newMaxEdge && this.gridSize === newMaxEdge) {
+      this.setData({
+        patternMaxEdge: newMaxEdge,
+        maxEdgeError: ""
+      });
+      return;
+    }
+
+    const nextGridSize = clamp(newMaxEdge, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
+    const ratio = contentWidth / contentHeight;
+    let targetW, targetH;
+    if (ratio >= 1) {
+      targetW = newMaxEdge;
+      targetH = Math.max(1, Math.round(newMaxEdge / ratio));
+    } else {
+      targetH = newMaxEdge;
+      targetW = Math.max(1, Math.round(newMaxEdge * ratio));
+    }
+    targetW = Math.min(targetW, nextGridSize);
+    targetH = Math.min(targetH, nextGridSize);
+
+    const scaledRect = this.resampleIndexGridSmart(
+      source.rectGrid,
+      contentWidth,
+      contentHeight,
+      targetW,
+      targetH,
+      source.bgIndex
+    );
+    const nextTotal = nextGridSize * nextGridSize;
+    const newGrid = new Array(nextTotal).fill(source.bgIndex);
+    const offsetX = Math.floor((nextGridSize - targetW) / 2);
+    const offsetY = Math.floor((nextGridSize - targetH) / 2);
+    for (let row = 0; row < targetH; row += 1) {
+      for (let col = 0; col < targetW; col += 1) {
+        newGrid[(offsetY + row) * nextGridSize + (offsetX + col)] = scaledRect[row * targetW + col];
+      }
+    }
+
+    const sizeChanged = nextGridSize !== this.gridSize;
+    if (!sizeChanged) {
+      const patch = [];
+      for (let i = 0; i < newGrid.length; i += 1) {
+        if (this.gridIndexes[i] !== newGrid[i]) {
+          patch.push({ index: i, from: this.gridIndexes[i], to: newGrid[i] });
+        }
+      }
+      if (patch.length) {
+        this.undoStack.push(patch);
+        if (this.undoStack.length > MAX_UNDO_STEPS) {
+          this.undoStack.shift();
+        }
+        this.redoStack = [];
+      }
+    } else {
+      this.undoStack = [];
+      this.redoStack = [];
+    }
+
+    this.gridSize = nextGridSize;
+    this.gridIndexes = newGrid;
+    this.hasManualEdits = !fromSource;
+    this.backgroundIndexSet = this.computeBackgroundIndexSet();
+    this.refreshBeadMetrics();
+    this.centerContent();
+
+    const used = this.computeUsedColorIndexes();
+    const computedEdge = this.computePatternMaxEdge();
+    const edgeLabel = String(newMaxEdge);
+    const presetEdge = EDGE_PRESET_LIST.map(String).includes(edgeLabel) ? edgeLabel : "custom";
+    this.setData({
+      patternMaxEdge: computedEdge || newMaxEdge,
+      selectedEditorMaxEdge: presetEdge,
+      customEditorMaxEdge: presetEdge === "custom" ? edgeLabel : "",
+      gridSizeText: this.getPatternSizeText(),
+      maxEdgeError: "",
+      usedPalette: this.buildPaletteByIndexes(used)
+    });
+    this.syncHistoryState();
+    this.requestRedraw(false);
+    this.schedulePersist();
+  },
   computeGridContentBounds(indexGrid, size) {
     if (!Array.isArray(indexGrid) || !size) return null;
     let minCol = size;
@@ -1012,6 +1593,158 @@ Page({
     }
     if (maxCol < minCol || maxRow < minRow) return null;
     return { minCol, minRow, maxCol, maxRow };
+  },
+  computeGridContentBoundsStrict(indexGrid, size) {
+    return this.computeGridContentBoundsWithChecker(indexGrid, size, (idx) => this.isBackgroundCell(idx));
+  },
+  computeGridContentBoundsWithChecker(indexGrid, size, checker) {
+    if (!Array.isArray(indexGrid) || !size) return null;
+    const isBackground = typeof checker === "function"
+      ? checker
+      : (idx) => this.isBackgroundCell(idx);
+    let minCol = size;
+    let minRow = size;
+    let maxCol = -1;
+    let maxRow = -1;
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        const idx = indexGrid[row * size + col];
+        if (isBackground(idx)) continue;
+        if (col < minCol) minCol = col;
+        if (row < minRow) minRow = row;
+        if (col > maxCol) maxCol = col;
+        if (row > maxRow) maxRow = row;
+      }
+    }
+    if (maxCol < minCol || maxRow < minRow) return null;
+    return { minCol, minRow, maxCol, maxRow };
+  },
+  buildResizeBackgroundSet(indexGrid, size) {
+    const set = Object.create(null);
+    if (!Array.isArray(indexGrid) || !size || indexGrid.length < size * size) return set;
+    set["-1"] = true;
+    const counter = Object.create(null);
+    const push = (idx) => {
+      const key = String(idx);
+      counter[key] = (counter[key] || 0) + 1;
+      if (this.isNearWhiteByIndex(idx)) set[key] = true;
+    };
+    for (let x = 0; x < size; x += 1) {
+      push(indexGrid[x]);
+      push(indexGrid[(size - 1) * size + x]);
+    }
+    for (let y = 1; y < size - 1; y += 1) {
+      push(indexGrid[y * size]);
+      push(indexGrid[y * size + (size - 1)]);
+    }
+    const entries = Object.keys(counter).map((key) => ({
+      index: Number(key),
+      count: counter[key]
+    })).sort((a, b) => b.count - a.count);
+    if (entries.length) {
+      const borderTotal = size * 4 - 4;
+      const top = entries[0];
+      // 让边缘主色在缩放时参与背景判断，去掉围绕主体的杂背景。
+      if (top && top.count >= Math.max(6, Math.floor(borderTotal * 0.18))) {
+        set[String(top.index)] = true;
+      }
+      for (let i = 1; i < entries.length && i < 3; i += 1) {
+        const item = entries[i];
+        if (item.count >= Math.max(5, Math.floor(top.count * 0.42)) && this.isNearWhiteByIndex(item.index)) {
+          set[String(item.index)] = true;
+        }
+      }
+    }
+    return set;
+  },
+  computePrimaryContentRegion(indexGrid, size, checker = null) {
+    if (!Array.isArray(indexGrid) || !size || indexGrid.length < size * size) return null;
+    const total = size * size;
+    const isBackground = typeof checker === "function"
+      ? checker
+      : (idx) => this.isBackgroundCell(idx);
+    const visited = new Uint8Array(total);
+    const queue = new Int32Array(total);
+    let bestCount = 0;
+    let bestBounds = null;
+    let bestCells = null;
+
+    for (let start = 0; start < total; start += 1) {
+      if (visited[start]) continue;
+      const startColor = indexGrid[start];
+      if (isBackground(startColor)) continue;
+
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      let count = 0;
+      let minCol = size;
+      let minRow = size;
+      let maxCol = -1;
+      let maxRow = -1;
+      const cells = [];
+
+      while (head < tail) {
+        const current = queue[head++];
+        const color = indexGrid[current];
+        if (isBackground(color)) continue;
+        const row = Math.floor(current / size);
+        const col = current - row * size;
+        cells.push(current);
+        count += 1;
+        if (col < minCol) minCol = col;
+        if (row < minRow) minRow = row;
+        if (col > maxCol) maxCol = col;
+        if (row > maxRow) maxRow = row;
+
+        if (col > 0) {
+          const left = current - 1;
+          if (!visited[left] && !isBackground(indexGrid[left])) {
+            visited[left] = 1;
+            queue[tail++] = left;
+          }
+        }
+        if (col < size - 1) {
+          const right = current + 1;
+          if (!visited[right] && !isBackground(indexGrid[right])) {
+            visited[right] = 1;
+            queue[tail++] = right;
+          }
+        }
+        if (row > 0) {
+          const up = current - size;
+          if (!visited[up] && !isBackground(indexGrid[up])) {
+            visited[up] = 1;
+            queue[tail++] = up;
+          }
+        }
+        if (row < size - 1) {
+          const down = current + size;
+          if (!visited[down] && !isBackground(indexGrid[down])) {
+            visited[down] = 1;
+            queue[tail++] = down;
+          }
+        }
+      }
+
+      if (count > bestCount) {
+        bestCount = count;
+        bestBounds = { minCol, minRow, maxCol, maxRow };
+        bestCells = cells;
+      }
+    }
+
+    if (!bestBounds || !bestCount) return null;
+    const mask = new Uint8Array(total);
+    for (let i = 0; i < bestCells.length; i += 1) {
+      mask[bestCells[i]] = 1;
+    }
+    return {
+      bounds: bestBounds,
+      mask
+    };
   },
   looksShiftedToCorner(indexGrid, size) {
     const bounds = this.computeGridContentBounds(indexGrid, size);
@@ -1192,12 +1925,14 @@ Page({
     const targetEdge = Math.max(220, stageEdge - 72);
     const baseCell = this.getBaseCell();
     const scale = targetEdge / (contentCells * baseCell);
-    return clamp(scale, MIN_SCALE, MAX_SCALE);
+    const { minScale, maxScale } = this.getScaleLimits();
+    return clamp(scale, minScale, maxScale);
   },
   centerContent(scale = null) {
     const bounds = this.computePrimaryContentBounds() || this.computeContentBounds();
     const resolvedScale = Number.isFinite(scale) ? scale : this.getAutoFitScale(bounds);
-    const safeScale = clamp(resolvedScale, MIN_SCALE, MAX_SCALE);
+    const { minScale, maxScale } = this.getScaleLimits();
+    const safeScale = clamp(resolvedScale, minScale, maxScale);
     const drawCell = Math.max(2, this.getBaseCell() * safeScale);
     const contentCenterCol = bounds ? (bounds.minCol + bounds.maxCol + 1) / 2 : this.gridSize / 2;
     const contentCenterRow = bounds ? (bounds.minRow + bounds.maxRow + 1) / 2 : this.gridSize / 2;
@@ -1211,7 +1946,16 @@ Page({
   redrawCanvas(lightMode = false) {
     if (!this.canvasReady) return;
 
-    const { drawCell, originX, originY, canvasWidth, canvasHeight } = this.getBoardMetrics();
+    const {
+      drawCell,
+      originX,
+      originY,
+      boardWidth,
+      boardHeight,
+      bounds,
+      canvasWidth,
+      canvasHeight
+    } = this.getBoardMetrics();
     const ctx = wx.createCanvasContext("editorCanvas", this);
     const isBeadMode = this.data.viewMode === "bead";
     const dragLikeMode = lightMode && (
@@ -1225,15 +1969,20 @@ Page({
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     if (this.data.hasEditableGrid && this.gridSize > 0 && this.gridIndexes.length) {
+      const displayCols = bounds.cols;
+      const displayRows = bounds.rows;
+      const startCol = bounds.minCol;
+      const startRow = bounds.minRow;
       let lastColor = "";
-      for (let row = 0; row < this.gridSize; row += 1) {
+      for (let row = 0; row < displayRows; row += 1) {
+        const rawRow = startRow + row;
         let segmentStart = 0;
-        let segmentColor = this.cellColorByIndex(this.gridIndexes[row * this.gridSize]);
-        for (let col = 1; col <= this.gridSize; col += 1) {
-          const reachedEnd = col === this.gridSize;
+        let segmentColor = this.cellColorByIndex(this.gridIndexes[rawRow * this.gridSize + startCol]);
+        for (let col = 1; col <= displayCols; col += 1) {
+          const reachedEnd = col === displayCols;
           const color = reachedEnd
             ? ""
-            : this.cellColorByIndex(this.gridIndexes[row * this.gridSize + col]);
+            : this.cellColorByIndex(this.gridIndexes[rawRow * this.gridSize + startCol + col]);
           if (!reachedEnd && color === segmentColor) continue;
           if (segmentColor !== lastColor) {
             ctx.setFillStyle(segmentColor);
@@ -1252,12 +2001,13 @@ Page({
 
       if (isBeadMode && Number.isFinite(highlightIndex) && highlightIndex >= 0) {
         ctx.setFillStyle("rgba(255,255,255,0.56)");
-        for (let row = 0; row < this.gridSize; row += 1) {
+        for (let row = 0; row < displayRows; row += 1) {
+          const rawRow = startRow + row;
           let segmentStart = -1;
-          for (let col = 0; col <= this.gridSize; col += 1) {
+          for (let col = 0; col <= displayCols; col += 1) {
             let shouldDim = false;
-            if (col < this.gridSize) {
-              const idx = this.gridIndexes[row * this.gridSize + col];
+            if (col < displayCols) {
+              const idx = this.gridIndexes[rawRow * this.gridSize + startCol + col];
               shouldDim = !this.isBackgroundCell(idx) && idx !== highlightIndex;
             }
             if (shouldDim && segmentStart < 0) segmentStart = col;
@@ -1277,13 +2027,17 @@ Page({
       if (this.data.showGridLines && drawCell >= 4) {
         if (!dragLikeMode) {
           ctx.beginPath();
-          for (let i = 0; i <= this.gridSize; i += 1) {
+          for (let i = 0; i <= displayCols; i += 1) {
             if (i % 5 === 0) continue;
             const p = i * drawCell;
             ctx.moveTo(originX + p, originY);
-            ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+            ctx.lineTo(originX + p, originY + boardHeight);
+          }
+          for (let i = 0; i <= displayRows; i += 1) {
+            if (i % 5 === 0) continue;
+            const p = i * drawCell;
             ctx.moveTo(originX, originY + p);
-            ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+            ctx.lineTo(originX + boardWidth, originY + p);
           }
           ctx.setLineWidth(0.8);
           ctx.setStrokeStyle("rgba(31,36,48,0.18)");
@@ -1291,12 +2045,15 @@ Page({
         }
 
         ctx.beginPath();
-        for (let i = 0; i <= this.gridSize; i += 5) {
+        for (let i = 0; i <= displayCols; i += 5) {
           const p = i * drawCell;
           ctx.moveTo(originX + p, originY);
-          ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+          ctx.lineTo(originX + p, originY + boardHeight);
+        }
+        for (let i = 0; i <= displayRows; i += 5) {
+          const p = i * drawCell;
           ctx.moveTo(originX, originY + p);
-          ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+          ctx.lineTo(originX + boardWidth, originY + p);
         }
         ctx.setLineWidth(1.2);
         ctx.setStrokeStyle("rgba(31,36,48,0.32)");
@@ -1305,12 +2062,15 @@ Page({
 
       if (this.data.showLocatorLines && drawCell >= 4 && !dragLikeMode) {
         ctx.beginPath();
-        for (let i = 0; i <= this.gridSize; i += 10) {
+        for (let i = 0; i <= displayCols; i += 10) {
           const p = i * drawCell;
           ctx.moveTo(originX + p, originY);
-          ctx.lineTo(originX + p, originY + this.gridSize * drawCell);
+          ctx.lineTo(originX + p, originY + boardHeight);
+        }
+        for (let i = 0; i <= displayRows; i += 10) {
+          const p = i * drawCell;
           ctx.moveTo(originX, originY + p);
-          ctx.lineTo(originX + this.gridSize * drawCell, originY + p);
+          ctx.lineTo(originX + boardWidth, originY + p);
         }
         ctx.setLineWidth(1.6);
         ctx.setStrokeStyle("rgba(255,59,92,0.34)");
@@ -1322,9 +2082,11 @@ Page({
         const labels = Array.isArray(this.beadCellLabels) ? this.beadCellLabels : [];
         ctx.setTextAlign("center");
         ctx.setTextBaseline("middle");
-        for (let row = 0; row < this.gridSize; row += 1) {
-          for (let col = 0; col < this.gridSize; col += 1) {
-            const index = row * this.gridSize + col;
+        for (let row = 0; row < displayRows; row += 1) {
+          const rawRow = startRow + row;
+          for (let col = 0; col < displayCols; col += 1) {
+            const rawCol = startCol + col;
+            const index = rawRow * this.gridSize + rawCol;
             const colorIndex = this.gridIndexes[index];
             if (this.isBackgroundCell(colorIndex)) continue;
             const label = isBeadMode
@@ -1357,16 +2119,18 @@ Page({
   },
   pointToCell(point) {
     if (!point || !this.data.hasEditableGrid || !this.gridSize) return null;
-    const { drawCell, originX, originY } = this.getBoardMetrics();
+    const { drawCell, originX, originY, bounds } = this.getBoardMetrics();
     const x = (point.x - originX) / drawCell;
     const y = (point.y - originY) / drawCell;
     const col = Math.floor(x);
     const row = Math.floor(y);
-    if (col < 0 || row < 0 || col >= this.gridSize || row >= this.gridSize) return null;
+    if (col < 0 || row < 0 || col >= bounds.cols || row >= bounds.rows) return null;
+    const rawCol = bounds.minCol + col;
+    const rawRow = bounds.minRow + row;
     return {
-      col,
-      row,
-      index: row * this.gridSize + col
+      col: rawCol,
+      row: rawRow,
+      index: rawRow * this.gridSize + rawCol
     };
   },
   drawLiveChangedCells(changedCells) {
@@ -1379,7 +2143,7 @@ Page({
       this.requestRedraw(true);
       return;
     }
-    const { drawCell, originX, originY } = this.getBoardMetrics();
+    const { drawCell, originX, originY, bounds } = this.getBoardMetrics();
     if (drawCell < 2) return;
 
     const ctx = wx.createCanvasContext("editorCanvas", this);
@@ -1398,18 +2162,21 @@ Page({
       const row = Number(cell.row);
       if (!Number.isFinite(col) || !Number.isFinite(row)) continue;
       if (col < 0 || row < 0 || col >= this.gridSize || row >= this.gridSize) continue;
+      if (col < bounds.minCol || col > bounds.maxCol || row < bounds.minRow || row > bounds.maxRow) continue;
+      const localCol = col - bounds.minCol;
+      const localRow = row - bounds.minRow;
 
       const index = row * this.gridSize + col;
       const color = this.cellColorByIndex(this.gridIndexes[index]);
-      const x = originX + col * drawCell;
-      const y = originY + row * drawCell;
+      const x = originX + localCol * drawCell;
+      const y = originY + localRow * drawCell;
       ctx.setFillStyle(color);
       ctx.fillRect(x, y, drawCell, drawCell);
 
-      markV(col, row, row + 1);
-      markV(col + 1, row, row + 1);
-      markH(row, col, col + 1);
-      markH(row + 1, col, col + 1);
+      markV(localCol, localRow, localRow + 1);
+      markV(localCol + 1, localRow, localRow + 1);
+      markH(localRow, localCol, localCol + 1);
+      markH(localRow + 1, localCol, localCol + 1);
     }
 
     const lines = Object.keys(lineMarks).map((key) => lineMarks[key]);
@@ -1510,20 +2277,24 @@ Page({
     ctx.draw(true);
   },
   applyScaleWithAnchor(nextScale, anchorCanvasPoint, anchorBoardX, anchorBoardY, updateOptions = {}) {
-    const safeScale = clamp(nextScale, MIN_SCALE, MAX_SCALE);
+    const { minScale, maxScale } = this.getScaleLimits();
+    const safeScale = clamp(nextScale, minScale, maxScale);
+    const bounds = this.getDisplayBounds();
     const baseCell = this.getBaseCell();
     const drawCell = Math.max(2, baseCell * safeScale);
-    const boardSize = drawCell * this.gridSize;
+    const boardWidth = drawCell * bounds.cols;
+    const boardHeight = drawCell * bounds.rows;
     const canvasWidth = this.data.canvasWidth;
     const canvasHeight = this.data.canvasHeight;
-    const centerOriginX = (canvasWidth - boardSize) / 2;
-    const centerOriginY = (canvasHeight - boardSize) / 2;
+    const centerOriginX = (canvasWidth - boardWidth) / 2;
+    const centerOriginY = (canvasHeight - boardHeight) / 2;
     const originX = anchorCanvasPoint.x - anchorBoardX * drawCell;
     const originY = anchorCanvasPoint.y - anchorBoardY * drawCell;
 
     this.scale = safeScale;
     this.offsetX = originX - centerOriginX;
     this.offsetY = originY - centerOriginY;
+    this.clampOffset();
     this.updateScaleText(updateOptions);
   },
   applyColorToCell(col, row, colorIndex, changesMap = null, changedCells = null) {
@@ -1590,6 +2361,7 @@ Page({
       this.undoStack.shift();
     }
     this.redoStack = [];
+    this.rebuildResizeMasterFromCurrent();
     this.syncHistoryState();
   },
   applyPatch(patch, direction) {
@@ -1627,6 +2399,7 @@ Page({
 
     const next = {
       ...work,
+      size: `${this.gridSize}x${this.gridSize}`,
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
         gridSize: this.gridSize,
@@ -2344,6 +3117,7 @@ Page({
       }
       this.offsetX = nextOffsetX;
       this.offsetY = nextOffsetY;
+      this.clampOffset();
       this.touchState.lastPoint = point;
       this.requestRedraw(true);
       return;
@@ -2357,6 +3131,7 @@ Page({
       if (Math.abs(nextOffsetX - this.offsetX) < 0.8 && Math.abs(nextOffsetY - this.offsetY) < 0.8) return;
       this.offsetX = nextOffsetX;
       this.offsetY = nextOffsetY;
+      this.clampOffset();
       this.requestRedraw(true);
       return;
     }
@@ -2441,7 +3216,8 @@ Page({
     this.requestRedraw(false);
   },
   applyScaleByPercent(percent, lightRedraw = true, updateOptions = {}) {
-    const safePercent = clamp(Math.round(toNumber(percent, 100) || 100), Math.round(MIN_SCALE * 100), Math.round(MAX_SCALE * 100));
+    const { minScale, maxScale } = this.getScaleLimits();
+    const safePercent = clamp(Math.round(toNumber(percent, 100) || 100), Math.round(minScale * 100), Math.round(maxScale * 100));
     const nextScale = safePercent / 100;
     const center = {
       x: this.data.canvasWidth / 2,
@@ -2494,7 +3270,8 @@ Page({
   commitScaleInput(rawValue) {
     if (!this.data.hasEditableGrid) return;
     const numeric = toNumber(String(rawValue || "").replace(/[^\d]/g, ""), this.data.scalePercent || 100);
-    const safePercent = clamp(Math.round(numeric), Math.round(MIN_SCALE * 100), Math.round(MAX_SCALE * 100));
+    const { minScale, maxScale } = this.getScaleLimits();
+    const safePercent = clamp(Math.round(numeric), Math.round(minScale * 100), Math.round(maxScale * 100));
     this.setData({
       scaleInputValue: String(safePercent),
       scalePercent: safePercent,
@@ -2527,6 +3304,7 @@ Page({
     this.applyPatch(patch, "undo");
     this.hasManualEdits = true;
     this.redoStack.push(patch);
+    this.rebuildResizeMasterFromCurrent();
     this.refreshUsedPalette();
     this.refreshBeadMetrics();
     this.requestRedraw(false);
@@ -2540,6 +3318,7 @@ Page({
     this.applyPatch(patch, "redo");
     this.hasManualEdits = true;
     this.undoStack.push(patch);
+    this.rebuildResizeMasterFromCurrent();
     this.refreshUsedPalette();
     this.refreshBeadMetrics();
     this.requestRedraw(false);
@@ -2648,6 +3427,16 @@ Page({
           wx.hideLoading();
         }
       }
+    });
+  },
+  handleEnterBeadMode() {
+    if (!this.data.hasEditableGrid || !this.data.workId) {
+      wx.showToast({ title: "暂无可查看图纸", icon: "none" });
+      return;
+    }
+    const name = encodeURIComponent(this.data.workName || "");
+    wx.navigateTo({
+      url: `/pages/bead/index?workId=${this.data.workId}&name=${name}`
     });
   }
 });

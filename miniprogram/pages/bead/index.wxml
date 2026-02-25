@@ -1,0 +1,70 @@
+<view class="bead-page">
+
+  <view class="bead-top-row">
+    <view class="size-chip">{{gridSizeText}}</view>
+    <view class="gesture-tip">双指缩放 · 单指拖拽</view>
+    <view class="highlight-chip">
+      <view class="highlight-dot" style="background: {{currentHighlightHex}};"></view>
+      <text class="highlight-text">当前高亮 {{currentHighlightCode}}</text>
+    </view>
+  </view>
+
+  <view class="canvas-panel brand-panel">
+    <view class="canvas-stage" catchtouchmove="handleStageTouchMove">
+      <canvas
+        canvas-id="beadCanvas"
+        class="bead-canvas"
+        width="{{canvasWidth}}"
+        height="{{canvasHeight}}"
+        catchtouchstart="handleCanvasTouchStart"
+        catchtouchmove="handleCanvasTouchMove"
+        catchtouchend="handleCanvasTouchEnd"
+        catchtouchcancel="handleCanvasTouchEnd"
+      ></canvas>
+      <view wx:if="{{showScaleOverlay}}" class="scale-overlay">{{scaleText}}</view>
+      <view wx:if="{{!hasGrid}}" class="canvas-empty">
+        <text>暂无拼豆图纸数据</text>
+        <text class="canvas-empty-sub">请返回编辑器重新生成后再试</text>
+      </view>
+    </view>
+  </view>
+
+
+  <view class="bead-panel brand-panel">
+    <view class="bead-panel-head" bindtap="handleToggleBeadStats">
+      <view class="bead-panel-title">色号统计（共 {{beadStats.length}} 种颜色）</view>
+      <view class="bead-panel-toggle">{{showAllBeadStats ? '收起 ▲' : '展开 ▼'}}</view>
+    </view>
+    <view class="bead-panel-sub">点击图纸或下方色块可高亮对应颜色</view>
+    <scroll-view wx:if="{{!showAllBeadStats}}" class="bead-preview-scroll" scroll-x="true" enable-flex="true">
+      <view class="bead-row">
+        <block wx:for="{{beadStats}}" wx:key="index">
+          <view
+            class="bead-item bead-item-preview {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handleSelectBeadColor"
+          >
+            <view class="bead-color" style="background: {{item.hex}};"></view>
+            <text class="bead-code">{{item.code}}</text>
+            <text class="bead-count">{{item.count}} 颗</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+    <scroll-view wx:if="{{showAllBeadStats}}" class="bead-full-scroll" scroll-y="true" enable-flex="true">
+      <view class="bead-grid">
+        <block wx:for="{{beadStats}}" wx:key="index">
+          <view
+            class="bead-item bead-item-full {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handleSelectBeadColor"
+          >
+            <view class="bead-color" style="background: {{item.hex}};"></view>
+            <text class="bead-code">{{item.code}}</text>
+            <text class="bead-count">{{item.count}} 颗</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+  </view>
+</view>

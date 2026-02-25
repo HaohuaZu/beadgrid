@@ -1,38 +1,43 @@
 <view class="editor-page">
-  <view class="editor-head brand-panel">
-    <view class="editor-title">{{workName}}</view>
-    <view class="editor-sub">图纸ID：{{workId}}</view>
-  </view>
 
-  <view class="editor-top-row">
-    <view class="size-chip">{{gridSizeText}}</view>
-    <view class="gesture-tip">双指缩放</view>
-    <button class="export-btn" bindtap="handleSaveExport">保存/导图</button>
-  </view>
-
-  <view class="mode-row brand-panel">
-    <view
-      class="mode-btn {{viewMode === 'edit' ? 'is-active' : ''}}"
-      data-mode="edit"
-      bindtap="handleSwitchViewMode"
-    >
-      <view class="{{iconFontReady ? 'mode-btn-icon iconfont ri-edit-2-line' : 'mode-btn-icon mode-btn-icon-fallback'}}">{{iconFontReady ? '' : '✎'}}</view>
-      <text>编辑模式</text>
+  <view class="editor-top-wrap">
+    <view class="editor-top-row">
+      <view class="size-chip size-chip-clickable" bindtap="handleTapSizeChip">
+        {{gridSizeText}}
+        <text class="size-chip-arrow">▾</text>
+      </view>
+      <view class="gesture-tip">双指缩放</view>
+      <view class="editor-top-actions">
+        <view class="top-action-btn bead-mode-btn" bindtap="handleEnterBeadMode">开始拼豆</view>
+        <view class="top-action-btn export-btn" bindtap="handleSaveExport">保存/导图</view>
+      </view>
     </view>
-    <view
-      class="mode-btn {{viewMode === 'bead' ? 'is-active' : ''}}"
-      data-mode="bead"
-      bindtap="handleSwitchViewMode"
-    >
-      <view class="{{iconFontReady ? 'mode-btn-icon iconfont ri-layout-grid-line' : 'mode-btn-icon mode-btn-icon-fallback'}}">{{iconFontReady ? '' : '▦'}}</view>
-      <text>拼豆模式</text>
+    <view wx:if="{{showEdgePicker}}" class="edge-picker-panel brand-panel" catchtap="noop">
+      <view class="edge-picker-title">设置图案最大边长</view>
+      <view class="edge-picker-sub">选择预设，或输入自定义（10-200）</view>
+      <view class="edge-picker-grid">
+        <block wx:for="{{edgePresetList}}" wx:key="value">
+          <view
+            class="edge-picker-chip {{selectedEditorMaxEdge === item.value ? 'is-active' : ''}}"
+            data-edge="{{item.value}}"
+            bindtap="handleSelectEdgePreset"
+          >
+            {{item.label}}
+          </view>
+        </block>
+      </view>
+      <view class="edge-picker-actions">
+        <view class="edge-picker-btn edge-picker-custom" bindtap="handleOpenCustomEdgeInput">自定义</view>
+        <view class="edge-picker-btn edge-picker-close" bindtap="handleCloseEdgePicker">关闭</view>
+      </view>
     </view>
   </view>
+  <view wx:if="{{showEdgePicker}}" class="edge-picker-mask" bindtap="handleCloseEdgePicker"></view>
 
   <view class="status-row brand-panel">
     <view class="status-chip">
       <text class="status-label">工具</text>
-      <text class="status-value">{{viewMode === 'bead' ? '拼豆' : currentToolLabel}}</text>
+      <text class="status-value">{{currentToolLabel}}</text>
     </view>
     <view class="status-chip status-color-chip" bindtap="handleOpenColorPicker">
       <view class="status-color-dot" style="background: {{selectedColorHex}};"></view>
@@ -124,65 +129,81 @@
 
   <view class="view-tools-row brand-panel">
     <view class="view-tool-title">视图</view>
-    <view class="view-tool-chip {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-drag-move-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '✥'}}</view>
-      <text>拖拽</text>
-    </view>
-    <view class="view-tool-chip {{currentTool === 'moveShape' ? 'is-active' : ''}}" data-tool="moveShape" bindtap="handleSwitchTool">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-3-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⤢'}}</view>
-      <text>移动图案</text>
-    </view>
-    <view class="view-tool-chip {{showGridLines ? 'is-active' : ''}}" data-action="toggleGrid" bindtap="handleQuickAction">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-grid-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '#'}}</view>
-      <text>网格</text>
-    </view>
-    <view class="view-tool-chip {{showColorCodeInEdit ? 'is-active' : ''}}" data-action="toggleColorCode" bindtap="handleQuickAction">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-hashtag' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◍'}}</view>
-      <text>色号</text>
-    </view>
-    <view class="view-tool-chip {{showLocatorLines ? 'is-active' : ''}}" data-action="toggleLocator" bindtap="handleQuickAction">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-crosshair-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⊞'}}</view>
-      <text>定位线</text>
-    </view>
-    <view class="view-tool-chip" data-action="mirror" bindtap="handleQuickAction">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-flip-horizontal-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⇋'}}</view>
-      <text>镜像</text>
-    </view>
-    <view class="view-tool-chip" data-action="center" bindtap="handleQuickAction">
-      <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◎'}}</view>
-      <text>居中</text>
-    </view>
+    <scroll-view class="view-tool-scroll" scroll-x="true" enable-flex="true" show-scrollbar="false">
+      <view class="view-tool-inline">
+        <view class="view-tool-chip {{currentTool === 'move' ? 'is-active' : ''}}" data-tool="move" bindtap="handleSwitchTool">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-drag-move-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '✥'}}</view>
+          <text>拖拽</text>
+        </view>
+        <view class="view-tool-chip {{currentTool === 'moveShape' ? 'is-active' : ''}}" data-tool="moveShape" bindtap="handleSwitchTool">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-3-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⤢'}}</view>
+          <text>移动图案</text>
+        </view>
+        <view class="view-tool-chip {{showGridLines ? 'is-active' : ''}}" data-action="toggleGrid" bindtap="handleQuickAction">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-grid-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '#'}}</view>
+          <text>网格</text>
+        </view>
+        <view class="view-tool-chip {{showColorCodeInEdit ? 'is-active' : ''}}" data-action="toggleColorCode" bindtap="handleQuickAction">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-hashtag' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◍'}}</view>
+          <text>色号</text>
+        </view>
+        <view class="view-tool-chip {{showLocatorLines ? 'is-active' : ''}}" data-action="toggleLocator" bindtap="handleQuickAction">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-crosshair-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⊞'}}</view>
+          <text>定位线</text>
+        </view>
+        <view class="view-tool-chip" data-action="mirror" bindtap="handleQuickAction">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-flip-horizontal-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '⇋'}}</view>
+          <text>镜像</text>
+        </view>
+        <view class="view-tool-chip" data-action="center" bindtap="handleQuickAction">
+          <view class="{{iconFontReady ? 'view-tool-icon iconfont ri-focus-2-line' : 'view-tool-icon view-tool-icon-fallback'}}">{{iconFontReady ? '' : '◎'}}</view>
+          <text>居中</text>
+        </view>
+      </view>
+    </scroll-view>
   </view>
+
   <view wx:if="{{viewMode === 'edit' && currentTool === 'moveShape'}}" class="move-shape-tip brand-panel">
     点击已填色格子后拖动，可整体移动图案
   </view>
 
-  <view class="zoom-slider-row brand-panel">
-    <view class="zoom-label">缩放</view>
-    <slider
-      class="zoom-slider"
-      min="50"
-      max="400"
-      step="1"
-      value="{{scalePercent}}"
-      activeColor="#ff3b5c"
-      backgroundColor="#e8ebf2"
-      block-color="#ff3b5c"
-      block-size="18"
-      bindchanging="handleScaleSliderChanging"
-      bindchange="handleScaleSliderChange"
-      show-value="false"
-    />
-    <input
-      class="zoom-input"
-      type="number"
-      value="{{scaleInputValue}}"
-      maxlength="3"
-      bindinput="handleScaleInput"
-      bindconfirm="handleScaleInputConfirm"
-      bindblur="handleScaleInputBlur"
-    />
-    <view class="zoom-unit">%</view>
+
+
+  <view wx:if="{{viewMode === 'edit' && beadStats.length}}" class="editor-bead-panel brand-panel">
+    <view class="editor-bead-head" bindtap="handleToggleBeadStats">
+      <view class="editor-bead-title">色号统计（共 {{beadStats.length}} 种颜色）</view>
+      <view class="editor-bead-toggle">{{showAllBeadStats ? '收起 ▲' : '展开 ▼'}}</view>
+    </view>
+    <scroll-view wx:if="{{!showAllBeadStats}}" class="editor-bead-preview-scroll" scroll-x="true" enable-flex="true">
+      <view class="editor-bead-row">
+        <block wx:for="{{beadStats}}" wx:key="index">
+          <view
+            class="editor-bead-item editor-bead-item-preview {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handleSelectBeadColor"
+          >
+            <view class="editor-bead-color" style="background: {{item.hex}};"></view>
+            <text class="editor-bead-code">{{item.code}}</text>
+            <text class="editor-bead-count">{{item.count}} 颗</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
+    <scroll-view wx:if="{{showAllBeadStats}}" class="editor-bead-full-scroll" scroll-y="true" enable-flex="true">
+      <view class="editor-bead-grid">
+        <block wx:for="{{beadStats}}" wx:key="index">
+          <view
+            class="editor-bead-item editor-bead-item-full {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
+            data-index="{{item.index}}"
+            bindtap="handleSelectBeadColor"
+          >
+            <view class="editor-bead-color" style="background: {{item.hex}};"></view>
+            <text class="editor-bead-code">{{item.code}}</text>
+            <text class="editor-bead-count">{{item.count}} 颗</text>
+          </view>
+        </block>
+      </view>
+    </scroll-view>
   </view>
 
   <view wx:if="{{viewMode === 'edit'}}" class="palette-panel brand-panel">
@@ -213,26 +234,6 @@
           >
             <view class="full-dot" style="background: {{item.hex}};"></view>
             <text class="full-code">{{item.code}}</text>
-          </view>
-        </block>
-      </view>
-    </scroll-view>
-  </view>
-
-  <view wx:if="{{viewMode === 'bead'}}" class="bead-panel brand-panel">
-    <view class="bead-title">色号统计（共 {{beadStats.length}} 种颜色）</view>
-    <view class="bead-sub">点击色块或图纸内色块可高亮显示</view>
-    <scroll-view class="bead-scroll" scroll-x="true" enable-flex="true">
-      <view class="bead-row">
-        <block wx:for="{{beadStats}}" wx:key="index">
-          <view
-            class="bead-item {{beadHighlightIndex === item.index ? 'is-active' : ''}}"
-            data-index="{{item.index}}"
-            bindtap="handleSelectBeadColor"
-          >
-            <view class="bead-color" style="background: {{item.hex}};"></view>
-            <text class="bead-code">{{item.code}}</text>
-            <text class="bead-count">{{item.count}} 颗</text>
           </view>
         </block>
       </view>

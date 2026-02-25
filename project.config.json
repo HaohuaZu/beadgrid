@@ -12,15 +12,28 @@
       "outputPath": ""
     },
     "useCompilerPlugins": false,
-    "minifyWXML": true
+    "minifyWXML": true,
+    "condition": true,
+    "compileWorklet": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "minifyWXSS": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "swc": false,
+    "disableSWC": true
   },
   "compileType": "miniprogram",
-  "simulatorPluginLibVersion": {},
+  "simulatorPluginLibVersion": {
+    "wxext14566970e7e9f62": "3.6.5-41"
+  },
   "packOptions": {
     "ignore": [],
     "include": []
   },
   "miniprogramRoot": "miniprogram/",
-  "appid": "wxdff2fb2346b4402b",
-  "editorSetting": {}
+  "appid": "wx8c9fc8b466409d69",
+  "editorSetting": {},
+  "simulatorType": "wechat",
+  "projectArchitecture": "multiPlatform"
 }

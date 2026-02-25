@@ -27,10 +27,35 @@
   gap: 10rpx;
 }
 
+.work-title-editable {
+  min-width: 0;
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8rpx;
+  padding: 4rpx 0;
+}
+
 .work-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 420rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 30rpx;
   color: #1F2430;
   font-weight: 700;
+}
+
+.work-title-edit-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  color: #98A2B3;
+  font-size: 20rpx;
+  line-height: 1;
+  transform: scaleX(-1);
 }
 
 .work-status {
@@ -823,6 +848,35 @@
   color: #fff;
   border-color: #FFD2DD;
   background: linear-gradient(135deg, #FF3B5C, #E53150);
+}
+
+.seg-row-wrap {
+  flex-wrap: wrap;
+}
+
+.custom-input-row {
+  margin-top: 10rpx;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.custom-input {
+  flex: 1;
+  height: 64rpx;
+  border: 1.5rpx solid #E6EAF0;
+  border-radius: 10rpx;
+  background: #fff;
+  padding: 0 14rpx;
+  box-sizing: border-box;
+  font-size: 26rpx;
+  color: #1F2430;
+}
+
+.custom-input-hint {
+  font-size: 24rpx;
+  color: #667085;
+  font-weight: 700;
 }
 
 .setting-note {

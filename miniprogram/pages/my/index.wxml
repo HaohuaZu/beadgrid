@@ -3,7 +3,10 @@
     <block wx:for="{{displayWorks}}" wx:key="id">
       <view class="work-card brand-panel">
         <view class="work-title-row">
-          <text class="work-title">{{item.title}}</text>
+          <view class="work-title-editable" data-id="{{item.id}}" bindtap="handleRenameWork">
+            <text class="work-title">{{item.title}}</text>
+            <text class="work-title-edit-icon">✎</text>
+          </view>
           <text class="work-status {{item.isGenerating ? 'is-generating' : ''}} {{item.isFailed ? 'is-failed' : ''}}">{{item.status}}</text>
         </view>
 
@@ -185,20 +188,54 @@
           </view>
 
           <view class="setting-block">
-            <view class="setting-title">尺寸选择</view>
-            <view class="seg-row">
+            <view class="setting-title">图案最大边长</view>
+            <view class="seg-row seg-row-wrap">
               <view
-                class="seg-item {{selectedSizeMode === 'auto' ? 'is-active' : ''}}"
-                data-mode="auto"
-                bindtap="handleSelectSizeMode"
-              >自动</view>
+                class="seg-item {{selectedMaxEdge === '36' ? 'is-active' : ''}}"
+                data-mode="36"
+                bindtap="handleSelectMaxEdge"
+              >36</view>
               <view
-                class="seg-item {{selectedSizeMode === 'small' ? 'is-active' : ''}}"
-                data-mode="small"
-                bindtap="handleSelectSizeMode"
-              >小</view>
+                class="seg-item {{selectedMaxEdge === '52' ? 'is-active' : ''}}"
+                data-mode="52"
+                bindtap="handleSelectMaxEdge"
+              >52</view>
+              <view
+                class="seg-item {{selectedMaxEdge === '72' ? 'is-active' : ''}}"
+                data-mode="72"
+                bindtap="handleSelectMaxEdge"
+              >72</view>
+              <view
+                class="seg-item {{selectedMaxEdge === '104' ? 'is-active' : ''}}"
+                data-mode="104"
+                bindtap="handleSelectMaxEdge"
+              >104</view>
+              <view
+                class="seg-item {{selectedMaxEdge === '156' ? 'is-active' : ''}}"
+                data-mode="156"
+                bindtap="handleSelectMaxEdge"
+              >156</view>
+              <view
+                class="seg-item {{selectedMaxEdge === '200' ? 'is-active' : ''}}"
+                data-mode="200"
+                bindtap="handleSelectMaxEdge"
+              >200</view>
+              <view
+                class="seg-item {{selectedMaxEdge === 'custom' ? 'is-active' : ''}}"
+                data-mode="custom"
+                bindtap="handleSelectMaxEdge"
+              >自定义</view>
             </view>
-            <view class="setting-note">自动会按图片比例推荐网格；小尺寸更省时，适合快速预览。</view>
+            <view wx:if="{{selectedMaxEdge === 'custom'}}" class="custom-input-row">
+              <input
+                class="custom-input"
+                type="number"
+                placeholder="输入10-200"
+                value="{{customMaxEdge}}"
+                bindinput="handleCustomMaxEdgeInput"
+              />
+            </view>
+            <view class="setting-note">图案的最大边长（格数），决定生成图案的精细程度。数值越大细节越多。</view>
           </view>
 
           <button

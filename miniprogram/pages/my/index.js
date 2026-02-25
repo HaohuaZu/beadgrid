@@ -1,9 +1,7 @@
 const {
   FINE_PALETTE,
-  resolveGridSize,
   quantizeToPalette,
-  formatGridDate,
-  buildBeadEstimate
+  formatGridDate
 } = require("../../utils/pixel-converter");
 const { packIndexGrid } = require("../../utils/grid-pack");
 
@@ -13,7 +11,7 @@ const LEGACY_STORAGE_KEY = "bead_work_library_v0";
 const STORAGE_SEEDED_KEY = "bead_work_library_seeded_v1";
 const MAX_STORED_WORKS = 20;
 const MAX_EDITABLE_WORKS = 12;
-const MAX_EDITOR_CELLS = 10000;
+const MAX_EDITOR_CELLS = 40000;
 const DEFAULT_EDITOR_BG = "#FFFFFF";
 const EDITOR_DATA_SCHEMA_VERSION = 3;
 const PALETTE_INDEX_BY_HEX = FINE_PALETTE.reduce((acc, item, index) => {
@@ -22,6 +20,29 @@ const PALETTE_INDEX_BY_HEX = FINE_PALETTE.reduce((acc, item, index) => {
   }
   return acc;
 }, Object.create(null));
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseHexRgb(hex) {
+  const raw = String(hex || "").replace("#", "").trim();
+  if (raw.length !== 6) return { r: 255, g: 255, b: 255 };
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
+    return { r: 255, g: 255, b: 255 };
+  }
+  return { r, g, b };
+}
+
+function distanceSqRgb(a, b) {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return dr * dr + dg * dg + db * db;
+}
 
 const DEMO_WORK_LIBRARY = [
   {
@@ -91,7 +112,8 @@ Page({
     namingError: "",
     selectedCostMode: "standard",
     selectedStyleMode: "cartoon",
-    selectedSizeMode: "auto",
+    selectedMaxEdge: "52",
+    customMaxEdge: "",
     costHintText: "转换一次花费1拼豆币，当前拼豆币：12",
     styleHintText: "适合拼豆的Q版人物、萌宠等Q版动漫像素风格",
     coinBalance: 12,
@@ -390,7 +412,8 @@ Page({
       namingError: "",
       selectedCostMode: "standard",
       selectedStyleMode: "cartoon",
-      selectedSizeMode: "auto",
+      selectedMaxEdge: "52",
+      customMaxEdge: "",
       costHintText: "转换一次花费1拼豆币，当前拼豆币：12",
       styleHintText: "适合拼豆的Q版人物、萌宠等Q版动漫像素风格"
     });
@@ -422,14 +445,56 @@ Page({
     if (!safe) return "";
     return safe.length > 20 ? safe.slice(0, 20) : safe;
   },
-  ensureUniqueWorkName(baseName) {
-    const existing = new Set(this.data.workLibrary.map((item) => (item.title || "").trim()).filter(Boolean));
+  ensureUniqueWorkName(baseName, excludeId = "") {
+    const existing = new Set(
+      this.data.workLibrary
+        .filter((item) => item && item.id !== excludeId)
+        .map((item) => (item.title || "").trim())
+        .filter(Boolean)
+    );
     if (!existing.has(baseName)) return baseName;
     let seq = 2;
     while (existing.has(`${baseName}-${seq}`)) {
       seq += 1;
     }
     return `${baseName}-${seq}`;
+  },
+  handleRenameWork(event) {
+    const workId = event.currentTarget.dataset.id;
+    if (!workId) return;
+    const work = this.data.workLibrary.find((item) => item && item.id === workId);
+    if (!work) return;
+
+    wx.showModal({
+      title: "修改作品名称",
+      content: work.title || "",
+      editable: true,
+      placeholderText: "请输入2-20字作品名",
+      confirmText: "保存",
+      success: (res) => {
+        if (!res.confirm) return;
+        const normalized = this.normalizeNameInput(res.content || "");
+        if (!normalized || normalized.length < 2) {
+          wx.showToast({
+            title: "请输入2-20字作品名",
+            icon: "none"
+          });
+          return;
+        }
+        const finalName = this.ensureUniqueWorkName(normalized, workId);
+        this.updateWorkLibrary(workId, (item) => ({
+          ...item,
+          title: finalName
+        }));
+        if (this.data.showWorkPreviewModal && this.data.previewWorkTitle === work.title) {
+          this.setData({ previewWorkTitle: finalName });
+        }
+        wx.showToast({
+          title: "名称已更新",
+          icon: "none"
+        });
+      }
+    });
   },
   handleNamingDraftInput(event) {
     this.setData({
@@ -677,9 +742,27 @@ Page({
     this.setData({ selectedStyleMode: mode, styleHintText: hint });
   },
   handleSelectSizeMode(event) {
+    // Legacy - no longer used for grid size
+  },
+  handleCustomGridSizeInput(event) {
+    // Legacy - no longer used
+  },
+  handleSelectMaxEdge(event) {
     const mode = event.currentTarget.dataset.mode;
-    if (!mode || mode === this.data.selectedSizeMode) return;
-    this.setData({ selectedSizeMode: mode });
+    if (!mode || mode === this.data.selectedMaxEdge) return;
+    this.setData({ selectedMaxEdge: mode });
+  },
+  handleCustomMaxEdgeInput(event) {
+    this.setData({ customMaxEdge: event.detail.value || "" });
+  },
+  resolveMaxEdgeFromSelection() {
+    const mode = this.data.selectedMaxEdge;
+    if (mode === "custom") {
+      const val = parseInt(this.data.customMaxEdge, 10);
+      return (Number.isFinite(val) && val >= 10 && val <= 200) ? val : 52;
+    }
+    const num = parseInt(mode, 10);
+    return (Number.isFinite(num) && num >= 10 && num <= 200) ? num : 52;
   },
   getImageInfo(imagePath) {
     return new Promise((resolve, reject) => {
@@ -733,52 +816,234 @@ Page({
       );
     });
   },
-  async sampleImageToGrid(imagePath, imageInfo, gridSize) {
+  async sampleImageToGrid(imagePath, imageInfo, gridSize, maxEdge) {
     const sourceWidth = imageInfo.width || gridSize;
     const sourceHeight = imageInfo.height || gridSize;
     const srcRatio = sourceWidth / sourceHeight;
-    const targetRatio = 1;
 
-    let drawWidth = gridSize;
-    let drawHeight = gridSize;
-    let drawX = 0;
-    let drawY = 0;
-
-    // CanvasContext.drawImage 在小程序里以 5 参数最稳定，
-    // 这里通过“放大 + 偏移”实现中心裁切，避免部分机型/版本出现截取错位。
-    if (srcRatio > targetRatio) {
-      drawHeight = gridSize;
-      drawWidth = Math.round(gridSize * srcRatio);
-      drawX = Math.floor((gridSize - drawWidth) / 2);
-      drawY = 0;
-    } else if (srcRatio < targetRatio) {
-      drawWidth = gridSize;
-      drawHeight = Math.round(gridSize / srcRatio);
-      drawX = 0;
-      drawY = Math.floor((gridSize - drawHeight) / 2);
+    // Compute the pattern area within gridSize canvas
+    const effectiveMaxEdge = Math.min(maxEdge || gridSize, gridSize);
+    let patternWidth, patternHeight;
+    if (srcRatio >= 1) {
+      // Landscape or square: long edge = effectiveMaxEdge
+      patternWidth = effectiveMaxEdge;
+      patternHeight = Math.round(effectiveMaxEdge / srcRatio);
+    } else {
+      // Portrait: long edge = effectiveMaxEdge
+      patternHeight = effectiveMaxEdge;
+      patternWidth = Math.round(effectiveMaxEdge * srcRatio);
     }
+    patternWidth = Math.max(1, Math.min(patternWidth, gridSize));
+    patternHeight = Math.max(1, Math.min(patternHeight, gridSize));
+
+    // Center the pattern on the gridSize x gridSize canvas
+    const drawX = Math.floor((gridSize - patternWidth) / 2);
+    const drawY = Math.floor((gridSize - patternHeight) / 2);
 
     await this.setDataAsync({ processCanvasSize: gridSize });
     await this.drawCanvasAsync("processCanvas", (ctx) => {
       ctx.setFillStyle("#FFFFFF");
       ctx.fillRect(0, 0, gridSize, gridSize);
-      ctx.drawImage(imagePath, drawX, drawY, drawWidth, drawHeight);
+      ctx.drawImage(imagePath, drawX, drawY, patternWidth, patternHeight);
     });
 
     return this.canvasGetImageDataAsync("processCanvas", gridSize, gridSize);
   },
-  async renderPatternImage(hexGrid, gridSize, withGridLines) {
+  isBackgroundHex(hex) {
+    const safeHex = String(hex || "").toUpperCase();
+    return safeHex === "#FFFFFF";
+  },
+  computeContentBoundsFromHexGrid(hexGrid, width, height) {
+    if (!Array.isArray(hexGrid) || !width || !height) return null;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const hex = hexGrid[y * width + x];
+        if (this.isBackgroundHex(hex)) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1
+    };
+  },
+  extractHexGridRect(hexGrid, sourceWidth, bounds) {
+    const out = new Array(bounds.width * bounds.height);
+    for (let y = 0; y < bounds.height; y += 1) {
+      const srcY = bounds.minY + y;
+      for (let x = 0; x < bounds.width; x += 1) {
+        const srcX = bounds.minX + x;
+        out[y * bounds.width + x] = hexGrid[srcY * sourceWidth + srcX] || "#FFFFFF";
+      }
+    }
+    return out;
+  },
+  scaleHexGridNearest(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight) {
+    const output = new Array(targetWidth * targetHeight);
+    for (let y = 0; y < targetHeight; y += 1) {
+      const srcY = Math.min(sourceHeight - 1, Math.floor(y * sourceHeight / targetHeight));
+      for (let x = 0; x < targetWidth; x += 1) {
+        const srcX = Math.min(sourceWidth - 1, Math.floor(x * sourceWidth / targetWidth));
+        output[y * targetWidth + x] = sourceGrid[srcY * sourceWidth + srcX] || "#FFFFFF";
+      }
+    }
+    return output;
+  },
+  scaleHexGridSmart(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight, backgroundHex = "#FFFFFF") {
+    const output = new Array(targetWidth * targetHeight);
+    const upscale = targetWidth >= sourceWidth && targetHeight >= sourceHeight;
+    const rgbByHex = Object.create(null);
+    for (let i = 0; i < FINE_PALETTE.length; i += 1) {
+      const item = FINE_PALETTE[i];
+      if (!item || !item.hex) continue;
+      rgbByHex[item.hex.toUpperCase()] = item.rgb || parseHexRgb(item.hex);
+    }
+    rgbByHex[String(backgroundHex || "#FFFFFF").toUpperCase()] = parseHexRgb(backgroundHex || "#FFFFFF");
+
+    if (upscale) {
+      return this.scaleHexGridNearest(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight);
+    }
+
+    for (let y = 0; y < targetHeight; y += 1) {
+      const sy0 = y * sourceHeight / targetHeight;
+      const sy1 = (y + 1) * sourceHeight / targetHeight;
+      const yStart = Math.floor(sy0);
+      let yEnd = Math.ceil(sy1) - 1;
+      if (yEnd < yStart) yEnd = yStart;
+      for (let x = 0; x < targetWidth; x += 1) {
+        const sx0 = x * sourceWidth / targetWidth;
+        const sx1 = (x + 1) * sourceWidth / targetWidth;
+        const xStart = Math.floor(sx0);
+        let xEnd = Math.ceil(sx1) - 1;
+        if (xEnd < xStart) xEnd = xStart;
+
+        let fgWeight = 0;
+        let bgWeight = 0;
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        const colorWeights = Object.create(null);
+
+        for (let sy = yStart; sy <= yEnd; sy += 1) {
+          for (let sx = xStart; sx <= xEnd; sx += 1) {
+            const overlapX = Math.max(0, Math.min(sx + 1, sx1) - Math.max(sx, sx0));
+            const overlapY = Math.max(0, Math.min(sy + 1, sy1) - Math.max(sy, sy0));
+            const weight = overlapX * overlapY;
+            if (weight <= 0) continue;
+            const hex = String(sourceGrid[sy * sourceWidth + sx] || backgroundHex).toUpperCase();
+            if (this.isBackgroundHex(hex)) {
+              bgWeight += weight;
+              continue;
+            }
+            const rgb = rgbByHex[hex] || parseHexRgb(hex);
+            fgWeight += weight;
+            sumR += rgb.r * weight;
+            sumG += rgb.g * weight;
+            sumB += rgb.b * weight;
+            colorWeights[hex] = (colorWeights[hex] || 0) + weight;
+          }
+        }
+
+        const totalWeight = fgWeight + bgWeight;
+        const fgCoverage = totalWeight > 0 ? (fgWeight / totalWeight) : 0;
+        if (fgWeight <= 0 || fgCoverage < 0.18) {
+          output[y * targetWidth + x] = backgroundHex;
+          continue;
+        }
+
+        let target = {
+          r: sumR / fgWeight,
+          g: sumG / fgWeight,
+          b: sumB / fgWeight
+        };
+        const centerSrcX = Math.min(sourceWidth - 1, Math.max(0, Math.floor((sx0 + sx1) / 2)));
+        const centerSrcY = Math.min(sourceHeight - 1, Math.max(0, Math.floor((sy0 + sy1) / 2)));
+        const centerHex = String(sourceGrid[centerSrcY * sourceWidth + centerSrcX] || backgroundHex).toUpperCase();
+        const centerSupport = colorWeights[centerHex] || 0;
+        if (!this.isBackgroundHex(centerHex) && centerSupport > 0 && fgCoverage < 0.45) {
+          output[y * targetWidth + x] = centerHex;
+          continue;
+        }
+        if (!this.isBackgroundHex(centerHex)) {
+          const centerRgb = rgbByHex[centerHex] || parseHexRgb(centerHex);
+          target = {
+            r: target.r * 0.72 + centerRgb.r * 0.28,
+            g: target.g * 0.72 + centerRgb.g * 0.28,
+            b: target.b * 0.72 + centerRgb.b * 0.28
+          };
+        }
+
+        let bestHex = backgroundHex;
+        let bestScore = Number.POSITIVE_INFINITY;
+        Object.keys(colorWeights).forEach((hex) => {
+          const rgb = rgbByHex[hex] || parseHexRgb(hex);
+          const dist = distanceSqRgb(target, rgb);
+          const support = colorWeights[hex] || 0;
+          const centerBonus = hex === centerHex ? 0.16 : 0;
+          const score = dist - support * 2200 - centerBonus * 1800;
+          if (score < bestScore) {
+            bestScore = score;
+            bestHex = hex;
+          }
+        });
+        output[y * targetWidth + x] = bestHex;
+      }
+    }
+
+    return output;
+  },
+  buildSquareHexGrid(rectGrid, rectWidth, rectHeight, squareSize) {
+    const output = new Array(squareSize * squareSize).fill("#FFFFFF");
+    const offsetX = Math.floor((squareSize - rectWidth) / 2);
+    const offsetY = Math.floor((squareSize - rectHeight) / 2);
+    for (let y = 0; y < rectHeight; y += 1) {
+      for (let x = 0; x < rectWidth; x += 1) {
+        const targetX = offsetX + x;
+        const targetY = offsetY + y;
+        if (targetX < 0 || targetY < 0 || targetX >= squareSize || targetY >= squareSize) continue;
+        output[targetY * squareSize + targetX] = rectGrid[y * rectWidth + x] || "#FFFFFF";
+      }
+    }
+    return {
+      squareGrid: output,
+      offsetX,
+      offsetY
+    };
+  },
+  buildCountMapFromHexGrid(hexGrid) {
+    const counter = Object.create(null);
+    for (let i = 0; i < hexGrid.length; i += 1) {
+      const hex = String(hexGrid[i] || "#FFFFFF").toUpperCase();
+      counter[hex] = (counter[hex] || 0) + 1;
+    }
+    return counter;
+  },
+  async renderPatternImage(hexGrid, width, height, withGridLines) {
     const cellSize = withGridLines ? 12 : 10;
-    const canvasSize = gridSize * cellSize;
+    const canvasWidth = width * cellSize;
+    const canvasHeight = height * cellSize;
+    const canvasSize = Math.max(canvasWidth, canvasHeight);
     await this.setDataAsync({ renderCanvasSize: canvasSize });
 
     await this.drawCanvasAsync("renderCanvas", (ctx) => {
       ctx.setFillStyle("#FFFFFF");
       ctx.fillRect(0, 0, canvasSize, canvasSize);
 
-      for (let y = 0; y < gridSize; y += 1) {
-        for (let x = 0; x < gridSize; x += 1) {
-          const index = y * gridSize + x;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          const index = y * width + x;
           const color = hexGrid[index] || "#FFFFFF";
           ctx.setFillStyle(color);
           ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
@@ -786,55 +1051,96 @@ Page({
       }
 
       if (withGridLines) {
-        for (let i = 0; i <= gridSize; i += 1) {
+        for (let i = 0; i <= width; i += 1) {
           const pos = i * cellSize;
           const major = i % 5 === 0;
           ctx.beginPath();
           ctx.setLineWidth(major ? 1.4 : 0.7);
           ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.48)" : "rgba(15, 23, 42, 0.2)");
           ctx.moveTo(pos, 0);
-          ctx.lineTo(pos, canvasSize);
+          ctx.lineTo(pos, canvasHeight);
           ctx.stroke();
+        }
 
+        for (let i = 0; i <= height; i += 1) {
+          const pos = i * cellSize;
+          const major = i % 5 === 0;
           ctx.beginPath();
           ctx.setLineWidth(major ? 1.4 : 0.7);
           ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.48)" : "rgba(15, 23, 42, 0.2)");
           ctx.moveTo(0, pos);
-          ctx.lineTo(canvasSize, pos);
+          ctx.lineTo(canvasWidth, pos);
           ctx.stroke();
         }
       }
     });
 
-    return this.canvasToTempFileAsync("renderCanvas", canvasSize, canvasSize);
+    return this.canvasToTempFileAsync("renderCanvas", canvasWidth, canvasHeight);
   },
-  async generatePatternFromUpload(imagePath, sizeMode) {
+  async generatePatternFromUpload(imagePath) {
     const imageInfo = await this.getImageInfo(imagePath);
-    const gridSize = resolveGridSize(sizeMode, imageInfo.width, imageInfo.height);
+    const maxEdge = this.resolveMaxEdgeFromSelection();
 
-    const sampled = await this.sampleImageToGrid(imagePath, imageInfo, gridSize);
+    const processingEdge = clamp(maxEdge * 2, maxEdge, 400);
+    const sampled = await this.sampleImageToGrid(imagePath, imageInfo, processingEdge, processingEdge);
     const quantized = quantizeToPalette(sampled.data);
-    const indexGrid = quantized.hexGrid.map((hex) => {
+    const initialBounds = this.computeContentBoundsFromHexGrid(quantized.hexGrid, processingEdge, processingEdge);
+    const trimmedGrid = initialBounds
+      ? this.extractHexGridRect(quantized.hexGrid, processingEdge, initialBounds)
+      : quantized.hexGrid.slice(0, processingEdge * processingEdge);
+    const trimmedWidth = initialBounds ? initialBounds.width : processingEdge;
+    const trimmedHeight = initialBounds ? initialBounds.height : processingEdge;
+    const ratio = trimmedWidth / Math.max(1, trimmedHeight);
+    const targetWidth = ratio >= 1
+      ? maxEdge
+      : Math.max(1, Math.round(maxEdge * ratio));
+    const targetHeight = ratio >= 1
+      ? Math.max(1, Math.round(maxEdge / Math.max(1e-6, ratio)))
+      : maxEdge;
+    const scaledRectGrid = this.scaleHexGridSmart(
+      trimmedGrid,
+      trimmedWidth,
+      trimmedHeight,
+      targetWidth,
+      targetHeight,
+      "#FFFFFF"
+    );
+    const squareResult = this.buildSquareHexGrid(scaledRectGrid, targetWidth, targetHeight, maxEdge);
+    const squareHexGrid = squareResult.squareGrid;
+
+    const indexGrid = squareHexGrid.map((hex) => {
       const key = String(hex || "").toUpperCase();
       const mapped = PALETTE_INDEX_BY_HEX[key];
       return Number.isFinite(mapped) ? mapped : 0;
     });
     const usedColorIndexes = [...new Set(indexGrid)].sort((a, b) => a - b);
-    const pixelImagePath = await this.renderPatternImage(quantized.hexGrid, gridSize, false);
-    const gridImagePath = await this.renderPatternImage(quantized.hexGrid, gridSize, true);
+    const scaledCounts = this.buildCountMapFromHexGrid(scaledRectGrid);
+    const pixelImagePath = await this.renderPatternImage(scaledRectGrid, targetWidth, targetHeight, false);
+    const gridImagePath = await this.renderPatternImage(scaledRectGrid, targetWidth, targetHeight, true);
 
     return {
-      gridSize,
+      gridSize: maxEdge,
+      displayWidth: targetWidth,
+      displayHeight: targetHeight,
       pixelImagePath,
       gridImagePath,
-      estimate: buildBeadEstimate(gridSize, quantized.counts),
+      estimate: {
+        total: targetWidth * targetHeight,
+        colorUsed: Object.keys(scaledCounts).filter((hex) => !this.isBackgroundHex(hex)).length
+      },
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
-        gridSize,
+        gridSize: maxEdge,
         indexGridPacked: packIndexGrid(indexGrid, FINE_PALETTE.length - 1),
         usedColorIndexes,
         backgroundHex: DEFAULT_EDITOR_BG,
-        userEdited: false
+        userEdited: false,
+        visibleBounds: {
+          minCol: squareResult.offsetX,
+          minRow: squareResult.offsetY,
+          maxCol: squareResult.offsetX + targetWidth - 1,
+          maxRow: squareResult.offsetY + targetHeight - 1
+        }
       }
     };
   },
@@ -875,6 +1181,13 @@ Page({
       wx.showToast({ title: "正在转换中，请稍候", icon: "none" });
       return;
     }
+    if (this.data.selectedMaxEdge === "custom") {
+      const val = parseInt(this.data.customMaxEdge, 10);
+      if (!Number.isFinite(val) || val < 10 || val > 200) {
+        wx.showToast({ title: "请输入10-200的图案边长", icon: "none" });
+        return;
+      }
+    }
 
     const suggestion = this.buildSuggestedWorkName(this.data.uploadImageName);
     this.setData({
@@ -899,8 +1212,7 @@ Page({
 
     try {
       const result = await this.generatePatternFromUpload(
-        this.data.uploadImagePath,
-        this.data.selectedSizeMode
+        this.data.uploadImagePath
       );
 
       this.updateWorkLibrary(pendingWork.id, (work) => ({
@@ -910,7 +1222,7 @@ Page({
         isFailed: false,
         date: "刚刚",
         createdAt: work.createdAt || Date.now(),
-        size: `${result.gridSize}x${result.gridSize}`,
+        size: `${result.displayWidth}x${result.displayHeight}`,
         style: "精致像素",
         previewImages: {
           origin: work.previewImages.origin,
@@ -955,5 +1267,5 @@ Page({
   handleOverlayTap() {
     this.handleCloseModal();
   },
-  noop() {}
+  noop() { }
 });

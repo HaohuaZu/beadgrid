@@ -1,0 +1,257 @@
+.bead-page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 20rpx 16rpx calc(env(safe-area-inset-bottom) + 24rpx);
+  background:
+    radial-gradient(circle at 10% 0%, #fff5f8 0%, transparent 25%),
+    radial-gradient(circle at 96% 10%, #f3f8ff 0%, transparent 24%),
+    #f7f8fa;
+}
+
+.bead-head {
+  padding: 16rpx;
+}
+
+.bead-title {
+  font-size: 34rpx;
+  color: #1f2430;
+  font-weight: 700;
+}
+
+.bead-sub {
+  margin-top: 6rpx;
+  font-size: 23rpx;
+  color: #667085;
+}
+
+.bead-top-row {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  flex-wrap: nowrap;
+}
+
+.size-chip {
+  height: 56rpx;
+  padding: 0 20rpx;
+  border-radius: 999rpx;
+  background: linear-gradient(135deg, #dff3ff, #ffe5ea);
+  color: #1f2430;
+  font-size: 28rpx;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gesture-tip {
+  flex: 1;
+  min-width: 0;
+  font-size: 23rpx;
+  color: #475467;
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.highlight-chip {
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 240rpx;
+  height: 48rpx;
+  padding: 0 12rpx;
+  box-sizing: border-box;
+  border-radius: 999rpx;
+  border: 1rpx solid #ffd2de;
+  background: #fff3f6;
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.highlight-dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 6rpx;
+  border: 1rpx solid rgba(15, 23, 42, 0.15);
+  flex-shrink: 0;
+}
+
+.highlight-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 20rpx;
+  color: #344054;
+  font-weight: 700;
+}
+
+.canvas-panel {
+  margin-top: 10rpx;
+  padding: 12rpx;
+}
+
+.canvas-stage {
+  position: relative;
+  height: 780rpx;
+  border-radius: 14rpx;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1rpx dashed #e1e7f0;
+}
+
+.bead-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8rpx;
+  color: #98a2b3;
+  font-size: 30rpx;
+}
+
+.canvas-empty-sub {
+  font-size: 23rpx;
+}
+
+.scale-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 12;
+  min-width: 120rpx;
+  height: 64rpx;
+  border-radius: 14rpx;
+  padding: 0 20rpx;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.62);
+  color: #ffffff;
+  font-size: 28rpx;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+
+
+
+.bead-panel {
+  margin-top: 10rpx;
+  padding: 14rpx 12rpx 12rpx;
+}
+
+.bead-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10rpx;
+}
+
+.bead-panel-title {
+  font-size: 30rpx;
+  color: #1f2430;
+  font-weight: 700;
+}
+
+.bead-panel-toggle {
+  flex-shrink: 0;
+  height: 44rpx;
+  line-height: 44rpx;
+  padding: 0 14rpx;
+  border-radius: 999rpx;
+  border: 1rpx solid #ffd2de;
+  background: #fff3f6;
+  font-size: 20rpx;
+  color: #ff3b5c;
+  font-weight: 700;
+}
+
+.bead-panel-sub {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #98a2b3;
+  font-weight: 500;
+}
+
+.bead-preview-scroll {
+  margin-top: 10rpx;
+  white-space: nowrap;
+}
+
+.bead-row {
+  display: inline-flex;
+  gap: 10rpx;
+  padding-right: 12rpx;
+}
+
+.bead-full-scroll {
+  margin-top: 10rpx;
+  max-height: 420rpx;
+}
+
+.bead-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10rpx;
+  padding-right: 4rpx;
+}
+
+.bead-item {
+  flex-shrink: 0;
+  border-radius: 14rpx;
+  border: 1rpx solid #e6eaf0;
+  background: #ffffff;
+  padding: 10rpx 8rpx;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5rpx;
+}
+
+.bead-item-preview {
+  width: 116rpx;
+}
+
+.bead-item-full {
+  width: calc((100% - 30rpx) / 4);
+}
+
+.bead-item.is-active {
+  border-color: #ffbfd0;
+  background: #ffeff3;
+  box-shadow: inset 0 -2rpx 0 rgba(255, 59, 92, 0.2);
+}
+
+.bead-color {
+  width: 54rpx;
+  height: 54rpx;
+  border-radius: 12rpx;
+  border: 1rpx solid rgba(15, 23, 42, 0.14);
+}
+
+.bead-code {
+  font-size: 21rpx;
+  color: #1f2430;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.bead-count {
+  font-size: 20rpx;
+  color: #98a2b3;
+  font-weight: 600;
+  line-height: 1;
+}
