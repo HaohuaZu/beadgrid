@@ -27,6 +27,17 @@ const zoomModalReset = document.getElementById("zoomModalReset");
 const zoomModalTitle = document.getElementById("zoomModalTitle");
 const zoomModalViewport = document.getElementById("zoomModalViewport");
 const zoomModalCanvas = document.getElementById("zoomModalCanvas");
+const exportModal = document.getElementById("exportModal");
+const exportModalBackdrop = document.getElementById("exportModalBackdrop");
+const exportModalClose = document.getElementById("exportModalClose");
+const exportPreviewCanvas = document.getElementById("exportPreviewCanvas");
+const exportPlanSummaryEl = document.getElementById("exportPlanSummary");
+const exportLargeHintEl = document.getElementById("exportLargeHint");
+const exportFormatSelect = document.getElementById("exportFormat");
+const exportModeSelect = document.getElementById("exportMode");
+const exportModeHintEl = document.getElementById("exportModeHint");
+const exportPresetHintEl = document.getElementById("exportPresetHint");
+const exportConfirmButton = document.getElementById("exportConfirm");
 
 const effectCompareStage = document.getElementById("effectCompareStage");
 const effectDivider = document.querySelector(".effect-divider");
@@ -77,6 +88,10 @@ const FIXED_MAX_COLORS = "12";
 const PNG_EXPORT_TARGET_CELL_SIZE = 36;
 const PNG_EXPORT_MIN_SIZE = 3200;
 const PNG_EXPORT_MAX_SIZE = 5200;
+const PNG_EXPORT_STANDARD_CELL_SIZE = 28;
+const PNG_EXPORT_STANDARD_MIN_SIZE = 2200;
+const PNG_EXPORT_STANDARD_MAX_SIZE = 3600;
+const EXPORT_PREVIEW_STORAGE_KEY = "beadgrid-export-settings-v1";
 const USER_AGENT = (navigator.userAgent || "").toLowerCase();
 const IS_WECHAT_BROWSER = /micromessenger/.test(USER_AGENT);
 const IS_IOS_DEVICE = /iphone|ipad|ipod/.test(USER_AGENT);
@@ -93,7 +108,8 @@ const state = {
   codeGrid: null,
   sourceFile: null,
   patternLayout: null,
-  legendExpanded: false
+  legendExpanded: false,
+  exportSettings: null
 };
 
 const cropState = {
@@ -119,6 +135,8 @@ const cropState = {
   pinch: null
 };
 
+state.exportSettings = loadExportSettings();
+
 let generationId = 0;
 let autoGenerateTimer = null;
 let effectDragActive = false;
@@ -143,6 +161,81 @@ function clampNumber(value, min, max, fallback) {
 function getSafeGridSize(value) {
   const gridSize = Number.parseInt(value, 10);
   return GRID_SIZES.includes(gridSize) ? gridSize : DEFAULT_GRID_SIZE;
+}
+
+function getDefaultExportSettings() {
+  return {
+    format: "pdf",
+    pdfMode: "a4",
+    pngMode: "ultra"
+  };
+}
+
+function loadExportSettings() {
+  const defaults = getDefaultExportSettings();
+  try {
+    const raw = window.localStorage.getItem(EXPORT_PREVIEW_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    return {
+      format: parsed && parsed.format === "png" ? "png" : defaults.format,
+      pdfMode: parsed && parsed.pdfMode === "ultra" ? "ultra" : defaults.pdfMode,
+      pngMode: parsed && parsed.pngMode === "standard" ? "standard" : defaults.pngMode
+    };
+  } catch (_error) {
+    return defaults;
+  }
+}
+
+function persistExportSettings() {
+  if (!state.exportSettings) return;
+  try {
+    window.localStorage.setItem(EXPORT_PREVIEW_STORAGE_KEY, JSON.stringify(state.exportSettings));
+  } catch (_error) {
+    // Ignore storage failures in private browsing or restricted environments.
+  }
+}
+
+function getExportModeOptions(format) {
+  if (format === "png") {
+    return [
+      {
+        value: "standard",
+        label: "标准高清单图",
+        hint: "适合快速保存和手机查看，清晰度高于普通截图。"
+      },
+      {
+        value: "ultra",
+        label: "超清单图",
+        hint: "单张大图，适合电子存档和局部放大查看。"
+      }
+    ];
+  }
+
+  return [
+    {
+      value: "a4",
+      label: "A4 分页详图",
+      hint: "默认推荐：1 张总览 + 多张清晰分页详图，超大尺寸也不容易糊。"
+    },
+    {
+      value: "ultra",
+      label: "单张超大 PDF",
+      hint: "导出为单页大画布，适合电子查看或后续再排版。"
+    }
+  ];
+}
+
+function getActiveExportFormat() {
+  return state.exportSettings && state.exportSettings.format === "png" ? "png" : "pdf";
+}
+
+function getActiveExportMode() {
+  const format = getActiveExportFormat();
+  if (format === "png") {
+    return state.exportSettings && state.exportSettings.pngMode === "standard" ? "standard" : "ultra";
+  }
+  return state.exportSettings && state.exportSettings.pdfMode === "ultra" ? "ultra" : "a4";
 }
 
 function setStatus(message) {
@@ -225,13 +318,7 @@ function updateLegendToggle(totalColors) {
 
 function renderLegend(legend) {
   clearLegend();
-  const sortedLegend = [...legend].sort((a, b) => {
-    const countDiff = (b.count || 0) - (a.count || 0);
-    if (countDiff !== 0) return countDiff;
-    const codeA = a.code || "";
-    const codeB = b.code || "";
-    return codeA.localeCompare(codeB, "zh-CN");
-  });
+  const sortedLegend = sortLegendItems(legend);
   const visible = state.legendExpanded ? sortedLegend : sortedLegend.slice(0, 8);
   visible.forEach((item) => {
     const wrapper = document.createElement("div");
@@ -401,6 +488,176 @@ function getUltraPngSize(gridSize) {
   return clamp(preferred, PNG_EXPORT_MIN_SIZE, PNG_EXPORT_MAX_SIZE);
 }
 
+function getStandardPngSize(gridSize) {
+  const preferred = Math.round(gridSize * PNG_EXPORT_STANDARD_CELL_SIZE + 160);
+  return clamp(preferred, PNG_EXPORT_STANDARD_MIN_SIZE, PNG_EXPORT_STANDARD_MAX_SIZE);
+}
+
+function sortLegendItems(legend) {
+  if (!Array.isArray(legend)) return [];
+  return [...legend].sort((a, b) => {
+    const countDiff = (b.count || 0) - (a.count || 0);
+    if (countDiff !== 0) return countDiff;
+    const codeA = a.code || "";
+    const codeB = b.code || "";
+    return codeA.localeCompare(codeB, "zh-CN");
+  });
+}
+
+function computeA4DetailPlan(gridSize) {
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const margin = 36;
+  const headerHeight = 54;
+  const footerHeight = 22;
+  const coordBand = 18;
+  const availableWidth = pageWidth - margin * 2 - coordBand * 2;
+  const availableHeight = pageHeight - margin * 2 - headerHeight - footerHeight - coordBand * 2 - 20;
+  const maxCellsByArea = Math.max(12, Math.floor(Math.min(availableWidth, availableHeight) / 14));
+  const cellsPerPage = Math.min(gridSize, Math.max(12, Math.min(32, maxCellsByArea)));
+  return {
+    cellsPerPage,
+    pagesX: Math.max(1, Math.ceil(gridSize / cellsPerPage)),
+    pagesY: Math.max(1, Math.ceil(gridSize / cellsPerPage))
+  };
+}
+
+function buildGridCanvas(size, options = {}) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  drawGrid(canvas, options.grid, {
+    gridLines: true,
+    axisLabels: true,
+    axisLabelStep: 1,
+    axisColor: "#111111",
+    tintAlpha: options.tintAlpha || 0.2,
+    showCodes: options.showCodes,
+    codeByHex: options.codeByHex,
+    codeGrid: options.codeGrid
+  });
+  return canvas;
+}
+
+function drawLegendSection(ctx, legend, layout) {
+  const items = sortLegendItems(legend);
+  if (!items.length) return;
+
+  ctx.save();
+  ctx.font = `700 ${layout.headerFontSize}px "Segoe UI", sans-serif`;
+  ctx.fillStyle = "#21160d";
+  ctx.fillText("颜色图例 / 颗粒统计", layout.x, layout.y + layout.headerFontSize);
+  ctx.restore();
+
+  items.forEach((item, index) => {
+    const col = index % layout.columns;
+    const row = Math.floor(index / layout.columns);
+    const cardX = layout.x + col * (layout.cardWidth + layout.gapX);
+    const cardY = layout.y + layout.headerHeight + row * (layout.cardHeight + layout.gapY);
+    const swatchHex = item.hex || item.color || "#000000";
+    const code = item.code || `#${item.index}`;
+
+    ctx.save();
+    ctx.fillStyle = "#fffaf1";
+    ctx.strokeStyle = "#deceb1";
+    ctx.lineWidth = 2;
+    drawRoundedRectPath(ctx, cardX, cardY, layout.cardWidth, layout.cardHeight, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = swatchHex;
+    ctx.fillRect(cardX + 18, cardY + 18, layout.swatchSize, layout.swatchSize);
+    ctx.strokeStyle = "rgba(0,0,0,0.08)";
+    ctx.strokeRect(cardX + 18, cardY + 18, layout.swatchSize, layout.swatchSize);
+
+    ctx.fillStyle = "#1f1f1f";
+    ctx.font = `700 ${layout.codeFontSize}px "Segoe UI", sans-serif`;
+    ctx.textBaseline = "top";
+    ctx.fillText(code, cardX + 18 + layout.swatchSize + 18, cardY + 14);
+
+    ctx.fillStyle = "#5b5145";
+    ctx.font = `${layout.metaFontSize}px "Segoe UI", sans-serif`;
+    ctx.fillText(`${item.count} 颗`, cardX + 18 + layout.swatchSize + 18, cardY + 14 + layout.codeFontSize + 8);
+    ctx.fillText(`${item.percent}%`, cardX + 18 + layout.swatchSize + 18, cardY + 14 + layout.codeFontSize + layout.metaFontSize + 18);
+    ctx.restore();
+  });
+}
+
+function drawRoundedRectPath(ctx, x, y, width, height, radius) {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+}
+
+function computePosterLayout(baseWidth, legendCount) {
+  const padding = Math.max(34, Math.round(baseWidth * 0.035));
+  const gridSize = baseWidth - padding * 2;
+  const columns = legendCount >= 10 ? 3 : legendCount >= 5 ? 2 : 1;
+  const gapX = Math.max(18, Math.round(baseWidth * 0.014));
+  const gapY = Math.max(14, Math.round(baseWidth * 0.012));
+  const cardWidth = Math.floor((baseWidth - padding * 2 - gapX * (columns - 1)) / columns);
+  const cardHeight = Math.max(78, Math.round(baseWidth * 0.105));
+  const rows = Math.max(1, Math.ceil(Math.max(1, legendCount) / columns));
+  const headerHeight = Math.max(46, Math.round(baseWidth * 0.038));
+  const legendHeight = headerHeight + rows * cardHeight + (rows - 1) * gapY;
+  return {
+    width: baseWidth,
+    height: padding + gridSize + Math.max(28, Math.round(baseWidth * 0.02)) + legendHeight + padding,
+    padding,
+    gridSize,
+    legend: {
+      x: padding,
+      y: padding + gridSize + Math.max(28, Math.round(baseWidth * 0.02)),
+      columns,
+      gapX,
+      gapY,
+      cardWidth,
+      cardHeight,
+      swatchSize: Math.max(18, Math.round(baseWidth * 0.022)),
+      headerHeight,
+      headerFontSize: Math.max(18, Math.round(baseWidth * 0.018)),
+      codeFontSize: Math.max(18, Math.round(baseWidth * 0.02)),
+      metaFontSize: Math.max(15, Math.round(baseWidth * 0.015))
+    }
+  };
+}
+
+function renderPosterToCanvas(canvas, options) {
+  const legendItems = sortLegendItems(options.legend);
+  const layout = computePosterLayout(options.baseWidth, legendItems.length);
+  canvas.width = layout.width;
+  canvas.height = layout.height;
+
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#f4ecdf";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const gridCanvas = buildGridCanvas(layout.gridSize, {
+    grid: options.grid,
+    showCodes: options.showCodes,
+    codeGrid: options.codeGrid,
+    codeByHex: options.codeByHex,
+    tintAlpha: 0.18
+  });
+  ctx.drawImage(gridCanvas, layout.padding, layout.padding, layout.gridSize, layout.gridSize);
+  drawLegendSection(ctx, legendItems, layout.legend);
+
+  return {
+    width: layout.width,
+    height: layout.height
+  };
+}
+
 function getTextColor(hex) {
   const clean = hex.replace("#", "");
   const r = Number.parseInt(clean.slice(0, 2), 16);
@@ -420,8 +677,273 @@ function syncBodyModalState() {
     || !cropModal.hidden
     || (scenarioModal && !scenarioModal.hidden)
     || (effectShowcaseModal && !effectShowcaseModal.hidden)
-    || (effectModal && !effectModal.hidden);
+    || (effectModal && !effectModal.hidden)
+    || (exportModal && !exportModal.hidden);
   document.body.classList.toggle("modal-open", isAnyModalOpen);
+}
+
+function syncExportModeOptions() {
+  if (!exportFormatSelect || !exportModeSelect) return;
+  const format = getActiveExportFormat();
+  const options = getExportModeOptions(format);
+  const activeMode = getActiveExportMode();
+  exportModeSelect.innerHTML = "";
+  options.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    exportModeSelect.appendChild(option);
+  });
+  exportModeSelect.value = options.some((item) => item.value === activeMode) ? activeMode : options[0].value;
+  const selected = options.find((item) => item.value === exportModeSelect.value) || options[0];
+  if (exportModeHintEl) {
+    exportModeHintEl.textContent = selected.hint;
+  }
+}
+
+function getExportPresetLabel() {
+  const format = getActiveExportFormat();
+  const mode = getActiveExportMode();
+  if (format === "png") {
+    if (mode === "standard") {
+      return "PNG 将导出为带图例与颗粒统计的单张高清图，适合快速保存与转发。";
+    }
+    return "PNG 将导出为带图例与颗粒统计的超清单图，更适合放大查看细节。";
+  }
+  if (mode === "ultra") {
+    return "PDF 将导出为单张超大矢量图纸，适合在电脑上放大查看或二次排版。";
+  }
+  return "PDF 默认导出为 A4 分页详图：先给总览，再自动拆成更清晰的分页图纸。";
+}
+
+function renderExportPreview() {
+  if (!exportPreviewCanvas || !exportPlanSummaryEl || !exportPresetHintEl || !exportLargeHintEl) return;
+  const ctx = exportPreviewCanvas.getContext("2d");
+  const width = exportPreviewCanvas.width;
+  const height = exportPreviewCanvas.height;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#f3e7d4";
+  ctx.fillRect(0, 0, width, height);
+  exportPresetHintEl.textContent = `${getExportPresetLabel()} 格内色号跟随上方“显示 MARD 色号”设置。`;
+
+  if (!state.grid || !state.legend) {
+    ctx.fillStyle = "#6e614e";
+    ctx.font = '600 28px "Segoe UI", sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("生成图纸后，这里会显示导出预览", width / 2, height / 2);
+    exportPlanSummaryEl.textContent = "上传并生成图纸后，可在这里预览导出布局。";
+    exportLargeHintEl.textContent = "";
+    return;
+  }
+
+  const format = getActiveExportFormat();
+  const mode = getActiveExportMode();
+  const plan = computeA4DetailPlan(state.grid.length);
+  const gridCanvas = buildGridCanvas(360, {
+    grid: state.grid,
+    showCodes: false,
+    codeGrid: state.codeGrid,
+    codeByHex: state.codeByHex,
+    tintAlpha: 0.18
+  });
+
+  ctx.save();
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#d9c6ab";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "rgba(88, 50, 10, 0.12)";
+  ctx.shadowBlur = 18;
+  ctx.shadowOffsetY = 8;
+
+  if (format === "pdf" && mode === "a4") {
+    const paperX = 70;
+    const paperY = 34;
+    const paperW = 500;
+    const paperH = 652;
+    ctx.fillRect(paperX, paperY, paperW, paperH);
+    ctx.strokeRect(paperX, paperY, paperW, paperH);
+    ctx.shadowColor = "transparent";
+    ctx.drawImage(gridCanvas, paperX + 72, paperY + 58, 356, 356);
+
+    const sliceW = 356 / plan.pagesX;
+    const sliceH = 356 / plan.pagesY;
+    ctx.strokeStyle = "rgba(186,31,31,0.82)";
+    ctx.lineWidth = 3;
+    for (let ix = 1; ix < plan.pagesX; ix += 1) {
+      const x = paperX + 72 + sliceW * ix;
+      ctx.beginPath();
+      ctx.moveTo(x, paperY + 58);
+      ctx.lineTo(x, paperY + 414);
+      ctx.stroke();
+    }
+    for (let iy = 1; iy < plan.pagesY; iy += 1) {
+      const y = paperY + 58 + sliceH * iy;
+      ctx.beginPath();
+      ctx.moveTo(paperX + 72, y);
+      ctx.lineTo(paperX + 428, y);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#fff8ee";
+    ctx.strokeStyle = "#dec9aa";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < Math.min(4, state.legend.length); i += 1) {
+      const cardY = paperY + 446 + i * 42;
+      ctx.fillRect(paperX + 40, cardY, 420, 34);
+      ctx.strokeRect(paperX + 40, cardY, 420, 34);
+    }
+
+    exportPlanSummaryEl.textContent = `A4 模式将导出 1 张总览 + ${plan.pagesX * plan.pagesY} 张分页详图。`;
+    exportLargeHintEl.textContent =
+      plan.pagesX * plan.pagesY > 1
+        ? `当前 ${state.grid.length} x ${state.grid.length} 图纸会拆成 ${plan.pagesX} x ${plan.pagesY} 个分页区块，细节更清晰。`
+        : "";
+  } else {
+    const previewWidth = format === "png" ? 540 : 520;
+    const previewHeight = format === "png" ? 650 : 620;
+    const posterX = Math.floor((width - previewWidth) / 2);
+    const posterY = Math.floor((height - previewHeight) / 2);
+    ctx.fillRect(posterX, posterY, previewWidth, previewHeight);
+    ctx.strokeRect(posterX, posterY, previewWidth, previewHeight);
+    ctx.shadowColor = "transparent";
+    ctx.drawImage(gridCanvas, posterX + 46, posterY + 34, previewWidth - 92, previewWidth - 92);
+    ctx.fillStyle = "#fff8ee";
+    ctx.strokeStyle = "#dec9aa";
+    for (let i = 0; i < Math.min(6, state.legend.length); i += 1) {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const cardX = posterX + 34 + col * ((previewWidth - 86) / 2);
+      const cardY = posterY + previewWidth - 36 + row * 44;
+      ctx.fillRect(cardX, cardY, (previewWidth - 100) / 2, 34);
+      ctx.strokeRect(cardX, cardY, (previewWidth - 100) / 2, 34);
+    }
+    exportPlanSummaryEl.textContent = format === "png"
+      ? `PNG 将导出为 1 张带图例的${mode === "standard" ? "高清" : "超清"}图纸。`
+      : "将导出为 1 张超大单页 PDF。";
+    exportLargeHintEl.textContent =
+      format === "png" && state.grid.length >= 104
+        ? "超大图纸若需要更稳的清晰度，建议优先选择 PDF 的 A4 分页详图。"
+        : "";
+  }
+
+  ctx.restore();
+}
+
+function syncExportControls() {
+  if (!exportFormatSelect) return;
+  exportFormatSelect.value = getActiveExportFormat();
+  syncExportModeOptions();
+  renderExportPreview();
+}
+
+function openExportModal(preferredFormat) {
+  if (!state.grid || !state.legend || !exportModal) return;
+  const safeFormat = preferredFormat === "png" ? "png" : "pdf";
+  state.exportSettings.format = safeFormat;
+  if (safeFormat === "pdf" && !state.exportSettings.pdfMode) {
+    state.exportSettings.pdfMode = "a4";
+  }
+  if (safeFormat === "png" && !state.exportSettings.pngMode) {
+    state.exportSettings.pngMode = "ultra";
+  }
+  syncExportControls();
+  exportModal.hidden = false;
+  syncBodyModalState();
+}
+
+function closeExportModal() {
+  if (!exportModal || exportModal.hidden) return;
+  exportModal.hidden = true;
+  syncBodyModalState();
+}
+
+async function exportPngFromSettings() {
+  const mode = getActiveExportMode();
+  const baseWidth = mode === "standard"
+    ? getStandardPngSize(state.grid.length)
+    : getUltraPngSize(state.grid.length);
+  const exportCanvas = document.createElement("canvas");
+  renderPosterToCanvas(exportCanvas, {
+    baseWidth,
+    grid: state.grid,
+    legend: state.legend,
+    showCodes: showCodesInput.checked,
+    codeGrid: state.codeGrid,
+    codeByHex: state.codeByHex
+  });
+
+  return new Promise((resolve) => {
+    exportCanvas.toBlob((blob) => {
+      resolve(blob || null);
+    });
+  });
+}
+
+async function exportPdfFromSettings() {
+  const mode = getActiveExportMode();
+  const res = await fetch("/api/export-pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grid: state.grid,
+      legend: state.legend,
+      codeGrid: showCodesInput.checked ? state.codeGrid : null,
+      title: "Bead Pattern",
+      pdfMode: mode
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error("pdf-export-failed");
+  }
+
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/pdf")) {
+    throw new Error("pdf-export-invalid");
+  }
+
+  const blob = await res.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error("pdf-export-empty");
+  }
+  return blob;
+}
+
+async function handleExportConfirm() {
+  if (!state.grid || !state.legend) return;
+  if (blockExportInWechat()) return;
+
+  const format = getActiveExportFormat();
+  const mode = getActiveExportMode();
+  exportConfirmButton.disabled = true;
+
+  try {
+    if (format === "png") {
+      setStatus(`正在准备${mode === "standard" ? "高清" : "超清"} PNG...`);
+      const blob = await exportPngFromSettings();
+      if (!blob) {
+        setStatus("PNG 导出失败。");
+        return;
+      }
+      downloadBlob(blob, `bead-pattern-${mode}.png`);
+      const sizeKb = Math.max(1, Math.round(blob.size / 1024));
+      setStatus(`PNG 导出完成（${sizeKb} KB）。`);
+    } else {
+      setStatus(`正在准备${mode === "a4" ? "A4 分页" : "超大单页"} PDF...`);
+      const blob = await exportPdfFromSettings();
+      downloadBlob(blob, `bead-pattern-${mode}.pdf`);
+      const sizeKb = Math.max(1, Math.round(blob.size / 1024));
+      setStatus(`PDF 导出完成（${sizeKb} KB）。`);
+    }
+    persistExportSettings();
+    closeExportModal();
+  } catch (_error) {
+    setStatus(`${format.toUpperCase()} 导出失败。`);
+  } finally {
+    exportConfirmButton.disabled = false;
+  }
 }
 
 function createZoomController(viewportEl, options = {}) {
@@ -1800,6 +2322,7 @@ async function generatePattern(fileOverride = null) {
     renderLegend(state.legend);
     refreshColorUsageStatus();
     refreshReadyStatus();
+    renderExportPreview();
     setButtons(true);
 
     if (!zoomModal.hidden) {
@@ -1811,6 +2334,7 @@ async function generatePattern(fileOverride = null) {
     setButtons(Boolean(state.grid));
     updatePreviewEmptyState();
     refreshColorUsageStatus();
+    renderExportPreview();
   }
 }
 
@@ -1866,6 +2390,9 @@ showCodesInput.addEventListener("change", () => {
   renderPatternCanvas();
   if (!zoomModal.hidden) {
     renderModalPattern();
+  }
+  if (exportModal && !exportModal.hidden) {
+    renderExportPreview();
   }
   refreshReadyStatus();
 });
@@ -2151,77 +2678,46 @@ imageInput.addEventListener("change", async () => {
 
 exportPngButton.addEventListener("click", () => {
   if (!state.grid) return;
-  if (blockExportInWechat()) return;
-  setStatus("正在准备超清 PNG...");
-
-  const exportSize = getUltraPngSize(state.grid.length);
-  const exportCanvas = document.createElement("canvas");
-  exportCanvas.width = exportSize;
-  exportCanvas.height = exportSize;
-
-  drawGrid(exportCanvas, state.grid, {
-    gridLines: true,
-    axisLabels: true,
-    axisLabelStep: 1,
-    axisColor: "#111111",
-    tintAlpha: 0.2,
-    showCodes: showCodesInput.checked,
-    codeByHex: state.codeByHex,
-    codeGrid: state.codeGrid
-  });
-
-  exportCanvas.toBlob((blob) => {
-    if (!blob) {
-      setStatus("PNG 导出失败。");
-      return;
-    }
-    downloadBlob(blob, "bead-pattern-ultra.png");
-    setStatus("超清 PNG 导出完成。");
-  });
+  openExportModal("png");
 });
 
 exportPdfButton.addEventListener("click", async () => {
   if (!state.grid) return;
-  if (blockExportInWechat()) return;
-
-  try {
-    setStatus("正在准备高清 PDF...");
-    const res = await fetch("/api/export-pdf", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        grid: state.grid,
-        legend: state.legend,
-        codeGrid: showCodesInput.checked ? state.codeGrid : null,
-        title: "Bead Pattern",
-        pdfMode: "ultra"
-      })
-    });
-
-    if (!res.ok) {
-      setStatus("高清 PDF 生成失败。");
-      return;
-    }
-
-    const contentType = (res.headers.get("content-type") || "").toLowerCase();
-    if (!contentType.includes("application/pdf")) {
-      setStatus("高清 PDF 导出失败（返回内容异常）。");
-      return;
-    }
-
-    const blob = await res.blob();
-    if (!blob || blob.size === 0) {
-      setStatus("高清 PDF 导出失败（空文件）。");
-      return;
-    }
-
-    downloadBlob(blob, "bead-pattern-ultra.pdf");
-    const sizeKb = Math.max(1, Math.round(blob.size / 1024));
-    setStatus(`高清 PDF 导出完成（${sizeKb} KB）。`);
-  } catch (_error) {
-    setStatus("高清 PDF 导出失败。");
-  }
+  openExportModal("pdf");
 });
+
+if (exportModalBackdrop) {
+  exportModalBackdrop.addEventListener("click", closeExportModal);
+}
+
+if (exportModalClose) {
+  exportModalClose.addEventListener("click", closeExportModal);
+}
+
+if (exportFormatSelect) {
+  exportFormatSelect.addEventListener("change", () => {
+    state.exportSettings.format = exportFormatSelect.value === "png" ? "png" : "pdf";
+    syncExportControls();
+  });
+}
+
+if (exportModeSelect) {
+  exportModeSelect.addEventListener("change", () => {
+    const format = getActiveExportFormat();
+    if (format === "png") {
+      state.exportSettings.pngMode = exportModeSelect.value === "standard" ? "standard" : "ultra";
+    } else {
+      state.exportSettings.pdfMode = exportModeSelect.value === "ultra" ? "ultra" : "a4";
+    }
+    syncExportControls();
+  });
+}
+
+if (exportConfirmButton) {
+  exportConfirmButton.addEventListener("click", () => {
+    handleExportConfirm();
+  });
+}
 
 zoomModalClose.addEventListener("click", closeZoomModal);
 zoomModalBackdrop.addEventListener("click", closeZoomModal);
@@ -2318,6 +2814,9 @@ window.addEventListener("resize", () => {
     constrainCropRectToImage();
     renderCropCanvas();
   }
+  if (exportModal && !exportModal.hidden) {
+    renderExportPreview();
+  }
 });
 
 window.addEventListener("keydown", (event) => {
@@ -2339,15 +2838,21 @@ window.addEventListener("keydown", (event) => {
       setStatus("已取消裁剪。准备好后可重新选择图片。");
       return;
     }
+    if (exportModal && !exportModal.hidden) {
+      closeExportModal();
+      return;
+    }
     closeZoomModal();
   }
 });
 
 syncMaxEdgeControls({ resetToMax: true });
 loadPalettes();
+syncExportControls();
 updateUploadFilename();
 updatePreviewEmptyState();
 refreshColorUsageStatus();
+renderExportPreview();
 updateWechatNoticeVisibility();
 setButtons(false);
 setStatus("请选择一张照片，放大并裁成上半身或头像，完成裁剪后系统会自动生成拼豆图纸。");

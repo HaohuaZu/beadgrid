@@ -2,9 +2,9 @@ Component({
   data: {
     selected: 0,
     list: [
-      { pagePath: "/pages/home/index", text: "图纸广场", key: "home" },
-      { pagePath: "/pages/my/index", text: "创作", key: "create" },
-      { pagePath: "/pages/profile/index", text: "我的", key: "profile" }
+      { pagePath: "/pages/home/index" },
+      { pagePath: "/pages/my/index" },
+      { pagePath: "/pages/profile/index" }
     ]
   },
   lifetimes: {
@@ -31,7 +31,8 @@ Component({
       this.setData({ selected });
     },
     switchTab(event) {
-      const index = event.currentTarget.dataset.index;
+      const index = Number(event.currentTarget.dataset.index);
+      if (!Number.isFinite(index)) return;
       const item = this.data.list[index];
       if (!item) return;
       const currentRoute = this.getCurrentRoute();

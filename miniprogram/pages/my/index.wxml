@@ -38,12 +38,14 @@
               src="{{item.previewImages.ai}}"
               mode="aspectFill"
             ></image>
-            <view wx:elif="{{item.isGenerating}}" class="preview-generating">
-              <text class="preview-generating-icon">⌛</text>
-              <text class="preview-generating-title">AI图纸生成中</text>
-              <text class="preview-generating-sub">约30秒至1分钟，请稍候</text>
-            </view>
-            <view wx:else class="preview-placeholder">AI图</view>
+            <block wx:if="{{!item.previewImages.ai}}">
+              <view wx:if="{{item.isGenerating}}" class="preview-generating">
+                <text class="preview-generating-icon">⌛</text>
+                <text class="preview-generating-title">AI图纸生成中</text>
+                <text class="preview-generating-sub">约30秒至1分钟，请稍候</text>
+              </view>
+              <view wx:else class="preview-placeholder">AI图</view>
+            </block>
             <view class="preview-label">AI图</view>
           </view>
           <view
@@ -58,12 +60,14 @@
               src="{{item.previewImages.grid}}"
               mode="aspectFill"
             ></image>
-            <view wx:elif="{{item.isGenerating}}" class="preview-generating">
-              <text class="preview-generating-icon">⌛</text>
-              <text class="preview-generating-title">AI图纸生成中</text>
-              <text class="preview-generating-sub">约1至2分钟，请稍候</text>
-            </view>
-            <view wx:else class="preview-placeholder">图纸</view>
+            <block wx:if="{{!item.previewImages.grid}}">
+              <view wx:if="{{item.isGenerating}}" class="preview-generating">
+                <text class="preview-generating-icon">⌛</text>
+                <text class="preview-generating-title">AI图纸生成中</text>
+                <text class="preview-generating-sub">约1至2分钟，请稍候</text>
+              </view>
+              <view wx:else class="preview-placeholder">图纸</view>
+            </block>
             <view class="preview-label">图纸</view>
           </view>
         </view>

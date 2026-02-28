@@ -2,7 +2,7 @@
   "setting": {
     "es6": true,
     "postcss": true,
-    "minified": true,
+    "minified": false,
     "uglifyFileName": false,
     "enhance": true,
     "packNpmRelationList": [],
@@ -12,12 +12,12 @@
       "outputPath": ""
     },
     "useCompilerPlugins": false,
-    "minifyWXML": true,
+    "minifyWXML": false,
     "condition": true,
     "compileWorklet": false,
     "uploadWithSourceMap": true,
     "packNpmManually": false,
-    "minifyWXSS": true,
+    "minifyWXSS": false,
     "localPlugins": false,
     "disableUseStrict": false,
     "swc": false,

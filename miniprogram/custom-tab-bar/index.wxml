@@ -1,10 +1,16 @@
 <view class="tabbar-wrap">
   <view class="tabbar-inner">
-    <block wx:for="{{list}}" wx:key="pagePath">
-      <view class="tab-item {{selected === index ? 'is-active' : ''}}" data-index="{{index}}" bindtap="switchTab">
-        <view class="tab-icon icon-{{item.key}}"></view>
-        <text class="tab-text">{{item.text}}</text>
-      </view>
-    </block>
+    <view class="tab-item {{selected === 0 ? 'is-active' : ''}}" data-index="0" bindtap="switchTab">
+      <view class="tab-icon icon-home"></view>
+      <text class="tab-text">图纸广场</text>
+    </view>
+    <view class="tab-item {{selected === 1 ? 'is-active' : ''}}" data-index="1" bindtap="switchTab">
+      <view class="tab-icon icon-create"></view>
+      <text class="tab-text">创作</text>
+    </view>
+    <view class="tab-item {{selected === 2 ? 'is-active' : ''}}" data-index="2" bindtap="switchTab">
+      <view class="tab-icon icon-profile"></view>
+      <text class="tab-text">我的</text>
+    </view>
   </view>
 </view>

@@ -59,7 +59,14 @@ Page({
   },
   onLoad(query) {
     const workId = query && query.workId ? query.workId : "";
-    const workName = query && query.name ? decodeURIComponent(query.name) : "拼豆模式";
+    let workName = "拼豆模式";
+    if (query && query.name) {
+      try {
+        workName = decodeURIComponent(query.name);
+      } catch (error) {
+        workName = String(query.name || "拼豆模式");
+      }
+    }
 
     this.palette = (Array.isArray(MARD221_COLORS) ? MARD221_COLORS : [])
       .filter((item) => item && item.hex)

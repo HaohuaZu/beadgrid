@@ -21,6 +21,10 @@ const SAMPLE_CELL_SIZE = 12;
 const DEFAULT_COLOR_WEIGHT = 1.5;
 const DEFAULT_BEADABILITY_WEIGHT = 1.5;
 const DEFAULT_CANDIDATE_COUNT = 6;
+const DEFAULT_SIMILARITY_MERGE_DELTA_E = 10.2;
+const DEFAULT_REGION_MERGE_DELTA_E = 7.8;
+const DEFAULT_REGION_MIN_SIZE = 5;
+const DEFAULT_REGION_MAJORITY_RATIO = 0.62;
 const SAMPLE_MODES = {
   MODE: "mode",
   AVERAGE: "average"
@@ -597,6 +601,59 @@ function nearestPaletteColor(color, palette) {
   return best;
 }
 
+function colorDistance(a, b) {
+  return Math.sqrt(distanceSq(a, b));
+}
+
+function mergeSimilarPaletteKeysByFrequency(keyGrid, paletteLookupByKey, similarityThreshold = 30) {
+  if (!Array.isArray(keyGrid) || !keyGrid.length || !Array.isArray(keyGrid[0])) {
+    return keyGrid;
+  }
+
+  const counts = new Map();
+  for (const row of keyGrid) {
+    for (const key of row) {
+      if (!key) continue;
+      const color = paletteLookupByKey.get(key);
+      if (color && color.transparent) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+
+  const keysByFrequency = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1])
+    .map((entry) => entry[0]);
+  if (keysByFrequency.length <= 1) {
+    return keyGrid;
+  }
+
+  const replaced = new Set();
+  const replacementMap = new Map();
+  const threshold = Math.max(0, Number(similarityThreshold) || 0);
+
+  for (let i = 0; i < keysByFrequency.length; i += 1) {
+    const currentKey = keysByFrequency[i];
+    if (replaced.has(currentKey)) continue;
+    const currentItem = paletteLookupByKey.get(currentKey);
+    if (!currentItem || !currentItem.rgb || currentItem.transparent) continue;
+
+    for (let j = i + 1; j < keysByFrequency.length; j += 1) {
+      const lowerKey = keysByFrequency[j];
+      if (replaced.has(lowerKey)) continue;
+      const lowerItem = paletteLookupByKey.get(lowerKey);
+      if (!lowerItem || !lowerItem.rgb || lowerItem.transparent) continue;
+      const distance = colorDistance(currentItem.rgb, lowerItem.rgb);
+      if (distance < threshold) {
+        replaced.add(lowerKey);
+        replacementMap.set(lowerKey, currentKey);
+      }
+    }
+  }
+
+  if (!replacementMap.size) return keyGrid;
+  return keyGrid.map((row) => row.map((key) => (key && replacementMap.has(key) ? replacementMap.get(key) : key)));
+}
+
 async function buildSamplingBuffer(buffer, { gridSize, maxEdgeSize, samplingMode, preprocessMode }) {
   const samplingSize = gridSize * SAMPLE_CELL_SIZE;
   const scaledEdge = clampNumber(
@@ -945,6 +1002,308 @@ function optimizeByPerceptualLoss(initialKeyGrid, cellCandidates, options) {
   return current;
 }
 
+function resolveKeyLab(key, paletteLookupByKey, rgbCache, labCache) {
+  if (!key) return null;
+  if (labCache.has(key)) return labCache.get(key);
+  const rgb = resolveKeyRgb(key, paletteLookupByKey, rgbCache);
+  const lab = rgb ? rgbToLab(rgb) : null;
+  labCache.set(key, lab || null);
+  return lab;
+}
+
+function isWarmHue(hue) {
+  if (!Number.isFinite(hue)) return false;
+  return hue <= 55 || hue >= 330;
+}
+
+function createKeyProfileResolver(paletteLookupByKey) {
+  const rgbCache = new Map();
+  const labCache = new Map();
+  const profileCache = new Map();
+  return (key) => {
+    if (!key) return null;
+    if (profileCache.has(key)) return profileCache.get(key);
+    const lab = resolveKeyLab(key, paletteLookupByKey, rgbCache, labCache);
+    if (!lab) {
+      profileCache.set(key, null);
+      return null;
+    }
+    const hue = getLabHue(lab);
+    const chroma = Math.sqrt(lab.a * lab.a + lab.b * lab.b);
+    const profile = {
+      l: lab.l,
+      hue,
+      chroma
+    };
+    profileCache.set(key, profile);
+    return profile;
+  };
+}
+
+function createKeyDeltaResolver(paletteLookupByKey) {
+  const rgbCache = new Map();
+  const labCache = new Map();
+  const deltaCache = new Map();
+  return (leftKey, rightKey) => {
+    if (!leftKey || !rightKey) return Infinity;
+    if (leftKey === rightKey) return 0;
+    const a = String(leftKey);
+    const b = String(rightKey);
+    const cacheKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+    if (deltaCache.has(cacheKey)) return deltaCache.get(cacheKey);
+    const leftLab = resolveKeyLab(leftKey, paletteLookupByKey, rgbCache, labCache);
+    const rightLab = resolveKeyLab(rightKey, paletteLookupByKey, rgbCache, labCache);
+    if (!leftLab || !rightLab) {
+      deltaCache.set(cacheKey, Infinity);
+      return Infinity;
+    }
+    const delta = deltaE2000(leftLab, rightLab);
+    deltaCache.set(cacheKey, delta);
+    return delta;
+  };
+}
+
+function smoothSimilarColorRegions(keyGrid, paletteLookupByKey, options = {}) {
+  if (!Array.isArray(keyGrid) || !keyGrid.length || !Array.isArray(keyGrid[0])) {
+    return { grid: keyGrid, changedCells: 0 };
+  }
+  const threshold = Number.isFinite(options.threshold)
+    ? Number(options.threshold)
+    : DEFAULT_REGION_MERGE_DELTA_E;
+  const minRegionSize = Math.max(
+    2,
+    Number.isFinite(options.minRegionSize) ? Math.floor(options.minRegionSize) : DEFAULT_REGION_MIN_SIZE
+  );
+  const majorityRatio = Math.min(
+    0.95,
+    Math.max(
+      0.5,
+      Number.isFinite(options.majorityRatio) ? Number(options.majorityRatio) : DEFAULT_REGION_MAJORITY_RATIO
+    )
+  );
+  const height = keyGrid.length;
+  const width = keyGrid[0].length;
+  const visited = Array.from({ length: height }, () => Array(width).fill(false));
+  const next = keyGrid.map((row) => row.slice());
+  const delta = createKeyDeltaResolver(paletteLookupByKey);
+  const profileOf = createKeyProfileResolver(paletteLookupByKey);
+  const dirs4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let changedCells = 0;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (visited[y][x]) continue;
+      const startKey = next[y][x];
+      if (!startKey) {
+        visited[y][x] = true;
+        continue;
+      }
+      const queue = [[x, y]];
+      visited[y][x] = true;
+      const region = [];
+      const keyCounts = new Map();
+
+      while (queue.length) {
+        const [cx, cy] = queue.pop();
+        const currentKey = next[cy][cx];
+        if (!currentKey) continue;
+        region.push([cx, cy]);
+        keyCounts.set(currentKey, (keyCounts.get(currentKey) || 0) + 1);
+
+        for (const [dx, dy] of dirs4) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height || visited[ny][nx]) continue;
+          const neighborKey = next[ny][nx];
+          if (!neighborKey) {
+            visited[ny][nx] = true;
+            continue;
+          }
+          if (delta(currentKey, neighborKey) <= threshold) {
+            visited[ny][nx] = true;
+            queue.push([nx, ny]);
+          }
+        }
+      }
+
+      if (region.length < minRegionSize || !keyCounts.size) continue;
+      let dominantKey = null;
+      let dominantCount = 0;
+      for (const [key, count] of keyCounts.entries()) {
+        if (count > dominantCount) {
+          dominantCount = count;
+          dominantKey = key;
+        }
+      }
+      if (!dominantKey || dominantCount === region.length) continue;
+      if (dominantCount / region.length < majorityRatio) continue;
+      const dominantProfile = profileOf(dominantKey);
+      if (dominantProfile) {
+        let minL = Infinity;
+        let maxL = -Infinity;
+        let darkCount = 0;
+        let warmCount = 0;
+        for (const [key, count] of keyCounts.entries()) {
+          const profile = profileOf(key);
+          if (!profile) continue;
+          minL = Math.min(minL, profile.l);
+          maxL = Math.max(maxL, profile.l);
+          if (profile.l <= 30) darkCount += count;
+          if (isWarmHue(profile.hue) && profile.chroma >= 22) warmCount += count;
+        }
+        const contrast = Number.isFinite(minL) && Number.isFinite(maxL) ? (maxL - minL) : 0;
+        const smallRegion = region.length <= 24;
+        const hasDarkDetails = darkCount >= Math.max(2, Math.floor(region.length * 0.22));
+        if (smallRegion && contrast >= 22) continue;
+        if (hasDarkDetails && dominantProfile.l > 40) continue;
+        if (warmCount > 0 && hasDarkDetails && isWarmHue(dominantProfile.hue) && dominantProfile.l > 34) continue;
+      }
+      for (const [cx, cy] of region) {
+        if (next[cy][cx] !== dominantKey) {
+          next[cy][cx] = dominantKey;
+          changedCells += 1;
+        }
+      }
+    }
+  }
+
+  return { grid: next, changedCells };
+}
+
+function mergeLowFrequencySimilarKeys(keyGrid, paletteLookupByKey, options = {}) {
+  if (!Array.isArray(keyGrid) || !keyGrid.length || !Array.isArray(keyGrid[0])) {
+    return { grid: keyGrid, changedCells: 0 };
+  }
+  const threshold = Number.isFinite(options.threshold)
+    ? Number(options.threshold)
+    : DEFAULT_SIMILARITY_MERGE_DELTA_E;
+  const minBaseCount = Number.isFinite(options.minRareCount)
+    ? Math.max(1, Math.floor(options.minRareCount))
+    : 0;
+  const height = keyGrid.length;
+  const width = keyGrid[0].length;
+  const counts = new Map();
+  let total = 0;
+  for (const row of keyGrid) {
+    for (const key of row) {
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
+      total += 1;
+    }
+  }
+  if (!counts.size || total === 0) return { grid: keyGrid, changedCells: 0 };
+  const minRareCount = Math.max(minBaseCount, Math.floor(total * 0.008), 6);
+  const sortedKeys = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1])
+    .map((entry) => entry[0]);
+  if (sortedKeys.length <= 1) return { grid: keyGrid, changedCells: 0 };
+
+  const delta = createKeyDeltaResolver(paletteLookupByKey);
+  const profileOf = createKeyProfileResolver(paletteLookupByKey);
+  const mergeMap = new Map();
+  for (let sourceIndex = sortedKeys.length - 1; sourceIndex >= 1; sourceIndex -= 1) {
+    const sourceKey = sortedKeys[sourceIndex];
+    const sourceCount = counts.get(sourceKey) || 0;
+    if (sourceCount > minRareCount) continue;
+    let bestTarget = null;
+    let bestScore = Infinity;
+    for (let targetIndex = 0; targetIndex < sourceIndex; targetIndex += 1) {
+      const targetKey = sortedKeys[targetIndex];
+      if (targetKey === sourceKey) continue;
+      const targetCount = counts.get(targetKey) || 0;
+      if (targetCount < Math.max(sourceCount + 1, Math.floor(sourceCount * 1.25))) continue;
+      const colorDelta = delta(sourceKey, targetKey);
+      if (!Number.isFinite(colorDelta) || colorDelta > threshold) continue;
+      const sourceProfile = profileOf(sourceKey);
+      const targetProfile = profileOf(targetKey);
+      if (sourceProfile && targetProfile) {
+        const luminanceJump = Math.abs(sourceProfile.l - targetProfile.l);
+        const sourceIsDark = sourceProfile.l <= 32;
+        const sourceIsNeutral = sourceProfile.chroma <= 10;
+        const targetIsWarm = isWarmHue(targetProfile.hue);
+        const targetIsSaturatedWarm = targetIsWarm && targetProfile.chroma >= 20;
+        if (sourceIsDark && targetIsSaturatedWarm && targetProfile.l >= 42) continue;
+        if (sourceIsNeutral && targetProfile.chroma >= 28 && luminanceJump >= 14) continue;
+        if (luminanceJump >= 24 && sourceCount <= minRareCount * 2) continue;
+      }
+      const score = colorDelta - Math.log(targetCount + 1) * 0.12;
+      if (score < bestScore) {
+        bestScore = score;
+        bestTarget = targetKey;
+      }
+    }
+    if (bestTarget) {
+      mergeMap.set(sourceKey, bestTarget);
+    }
+  }
+
+  if (!mergeMap.size) return { grid: keyGrid, changedCells: 0 };
+  const next = keyGrid.map((row) => row.slice());
+  let changedCells = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const key = next[y][x];
+      if (!key || !mergeMap.has(key)) continue;
+      next[y][x] = mergeMap.get(key);
+      changedCells += 1;
+    }
+  }
+  return { grid: next, changedCells };
+}
+
+function refineKeyGridColors(keyGrid, paletteLookupByKey, options = {}) {
+  const smoothThreshold = Number.isFinite(options.smoothThreshold)
+    ? Number(options.smoothThreshold)
+    : DEFAULT_REGION_MERGE_DELTA_E;
+  const mergeThreshold = Number.isFinite(options.mergeThreshold)
+    ? Number(options.mergeThreshold)
+    : DEFAULT_SIMILARITY_MERGE_DELTA_E;
+  const smoothRounds = Math.max(
+    0,
+    Number.isFinite(options.smoothRounds) ? Math.floor(options.smoothRounds) : 1
+  );
+  const smoothMinRegionSize = Math.max(
+    2,
+    Number.isFinite(options.smoothMinRegionSize)
+      ? Math.floor(options.smoothMinRegionSize)
+      : DEFAULT_REGION_MIN_SIZE
+  );
+  const smoothMajorityRatio = Math.min(
+    0.95,
+    Math.max(
+      0.5,
+      Number.isFinite(options.smoothMajorityRatio)
+        ? Number(options.smoothMajorityRatio)
+        : DEFAULT_REGION_MAJORITY_RATIO
+    )
+  );
+
+  let refined = keyGrid;
+  for (let round = 0; round < smoothRounds; round += 1) {
+    const smoothed = smoothSimilarColorRegions(refined, paletteLookupByKey, {
+      threshold: smoothThreshold,
+      minRegionSize: smoothMinRegionSize,
+      majorityRatio: smoothMajorityRatio
+    });
+    refined = smoothed.grid;
+    if (!smoothed.changedCells) break;
+  }
+
+  const merged = mergeLowFrequencySimilarKeys(refined, paletteLookupByKey, {
+    threshold: mergeThreshold
+  });
+  refined = merged.grid;
+  if (merged.changedCells > 0 && smoothRounds > 0) {
+    const finalSmooth = smoothSimilarColorRegions(refined, paletteLookupByKey, {
+      threshold: smoothThreshold,
+      minRegionSize: smoothMinRegionSize,
+      majorityRatio: smoothMajorityRatio
+    });
+    refined = finalSmooth.grid;
+  }
+  return refined;
+}
+
 function buildLegendFromKeyGrid(keyGrid, paletteOrderKeys, paletteLookupByKey) {
   const counts = new Map();
   for (const row of keyGrid) {
@@ -980,6 +1339,10 @@ function buildLegendFromKeyGrid(keyGrid, paletteOrderKeys, paletteLookupByKey) {
 async function generateGridFromImage(buffer, options) {
   const gridSize = options.gridSize;
   const maxEdgeSize = clampNumber(options.maxEdgeSize, 1, gridSize, gridSize);
+  const similarityThresholdRaw = Number(options.similarityThreshold);
+  const similarityThreshold = Number.isFinite(similarityThresholdRaw)
+    ? Math.max(0, Math.min(120, similarityThresholdRaw))
+    : 30;
   const samplingMode = options.samplingMode === SAMPLE_MODES.AVERAGE
     ? SAMPLE_MODES.AVERAGE
     : SAMPLE_MODES.MODE;
@@ -1015,8 +1378,7 @@ async function generateGridFromImage(buffer, options) {
       keyGrid.push(mappedHex.slice(y * gridSize, (y + 1) * gridSize));
     }
 
-    const optimizedKeyGrid = options.optimize ? optimizeGrid(keyGrid, options.optimizePasses) : keyGrid;
-    const cleanedKeyGrid = removeBorderConnectedWhiteBackground(optimizedKeyGrid, null);
+    const cleanedKeyGrid = removeBorderConnectedWhiteBackground(keyGrid, null);
     const lookup = new Map();
     for (const row of cleanedKeyGrid) {
       for (const hex of row) {
@@ -1045,54 +1407,41 @@ async function generateGridFromImage(buffer, options) {
   }
 
   const paletteColors = enrichPaletteWithLab(normalizePaletteColors(options.palette.colors));
+  const opaquePalette = paletteColors.filter((item) => item && item.rgb && !item.transparent);
+  if (!opaquePalette.length) {
+    throw new Error("palette-has-no-opaque-colors");
+  }
   const paletteOrderKeys = paletteColors.map((item) => getPaletteItemKey(item));
   const paletteLookupByKey = new Map(paletteColors.map((item) => [getPaletteItemKey(item), item]));
-  const firstOpaqueItem = paletteColors.find((item) => !item.transparent) || null;
+  const firstOpaqueItem = opaquePalette[0] || null;
   const firstOpaqueKey = firstOpaqueItem ? getPaletteItemKey(firstOpaqueItem) : (paletteOrderKeys[0] || null);
 
-  // Build top-k perceptual candidates per cell using LAB + DeltaE2000.
-  const cellCandidates = buildPerceptualCandidates(
-    representativeColors,
-    paletteColors,
-    DEFAULT_CANDIDATE_COUNT
-  );
-
-  const keyGrid = mappingStrategy === MAPPING_STRATEGIES.CLUSTER_FIRST
-    ? buildClusterFirstKeyGrid(
-      representativeColors,
-      paletteColors,
-      options.clusterCount || options.maxColors || FIXED_MAX_COLORS,
-      gridSize
-    )
-    : (() => {
-      const directGrid = [];
-      for (let y = 0; y < gridSize; y += 1) {
-        const row = [];
-        for (let x = 0; x < gridSize; x += 1) {
-          const cell = cellCandidates[y * gridSize + x];
-          if (cell && cell.empty) {
-            row.push(null);
-            continue;
-          }
-          const fallbackKey = firstOpaqueKey;
-          row.push(cell && cell.candidates[0] ? cell.candidates[0].key : fallbackKey);
-        }
-        directGrid.push(row);
+  // Zippland style pipeline: cell representative color -> nearest palette RGB -> global similar-color merge by frequency.
+  const keyGrid = [];
+  for (let y = 0; y < gridSize; y += 1) {
+    const row = [];
+    for (let x = 0; x < gridSize; x += 1) {
+      const rep = representativeColors[y * gridSize + x];
+      if (!rep) {
+        row.push(null);
+        continue;
       }
-      return directGrid;
-    })();
+      const closest = nearestPaletteColor({
+        r: Math.round(rep.r),
+        g: Math.round(rep.g),
+        b: Math.round(rep.b)
+      }, opaquePalette);
+      row.push(closest ? getPaletteItemKey(closest) : firstOpaqueKey);
+    }
+    keyGrid.push(row);
+  }
 
-  const optimizedKeyGrid = options.optimize
-    ? optimizeByPerceptualLoss(keyGrid, cellCandidates, {
-      alpha: options.alpha,
-      beta: options.beta,
-      passes: options.optimizePasses,
-      paletteLookupByKey,
-      hueGuard: true,
-      maxHueShift: 52
-    })
-    : keyGrid;
-  const cleanedKeyGrid = removeBorderConnectedWhiteBackground(optimizedKeyGrid, paletteLookupByKey);
+  const mergedKeyGrid = mergeSimilarPaletteKeysByFrequency(
+    keyGrid,
+    paletteLookupByKey,
+    similarityThreshold
+  );
+  const cleanedKeyGrid = removeBorderConnectedWhiteBackground(mergedKeyGrid, paletteLookupByKey);
   const fallbackItem = firstOpaqueItem || paletteColors[0] || null;
   const itemGrid = cleanedKeyGrid.map((row) => row.map((key) => (
     key
@@ -1111,192 +1460,665 @@ async function generateGridFromImage(buffer, options) {
   };
 }
 
-function renderPdfFromGrid({ grid, legend, title, codeGrid, mode = "ultra" }) {
-  const gridSize = grid.length;
-  const normalizedMode = mode === "a4" ? "a4" : "ultra";
-  const margin = normalizedMode === "a4" ? 36 : 42;
-  const titleGap = 34;
-  const safeTitle = sanitizePdfTitle(title || "Bead Pattern");
+function normalizePdfMode(mode) {
+  return mode === "ultra" ? "ultra" : "a4";
+}
 
-  const safeLegend = Array.isArray(legend) ? [...legend].sort((a, b) => (b.count || 0) - (a.count || 0)) : [];
-  const legendCount = safeLegend.length;
-  const legendGapX = normalizedMode === "a4" ? 8 : 10;
-  const legendCardHeight = normalizedMode === "a4" ? 34 : 36;
-  const legendRowHeight = legendCardHeight + (normalizedMode === "a4" ? 8 : 9);
-  const legendHeaderGap = normalizedMode === "a4" ? 46 : 52;
-  const legendCodeFontSize = normalizedMode === "a4" ? 12 : 13;
-  const legendMetaFontSize = normalizedMode === "a4" ? 10 : 11;
-  const legendSwatchSize = normalizedMode === "a4" ? 12 : 13;
+function normalizePdfPaperSize(size) {
+  return String(size || "").toUpperCase() === "A3" ? "A3" : "A4";
+}
 
-  let doc;
-  let pageWidth;
-  let pageHeight;
-  let availableWidth;
-  let cellSize;
-  let coordBand;
-  let columns;
-  let rowHeight = legendRowHeight;
-  let cardHeight = legendCardHeight;
-  let legendAreaHeight;
+function computePagedDetailPlan({ gridSize, paperSize }) {
+  const safeGrid = Math.max(1, Number(gridSize) || 1);
+  const normalizedPaperSize = normalizePdfPaperSize(paperSize);
+  const preferredCells = normalizedPaperSize === "A3" ? 28 : 20;
+  const cellsPerPage = Math.min(safeGrid, Math.max(12, preferredCells));
+  return {
+    paperSize: normalizedPaperSize,
+    cellsPerPage,
+    pagesX: Math.max(1, Math.ceil(safeGrid / cellsPerPage)),
+    pagesY: Math.max(1, Math.ceil(safeGrid / cellsPerPage))
+  };
+}
 
-  if (normalizedMode === "a4") {
-    doc = new PDFDocument({
-      size: "A4",
-      margin
-    });
-    pageWidth = doc.page.width;
-    pageHeight = doc.page.height;
-    availableWidth = pageWidth - margin * 2;
+function drawPdfGridBlock(doc, options) {
+  const {
+    grid,
+    codeGrid,
+    startX,
+    startY,
+    cellSize,
+    coordBand,
+    offsetX = 0,
+    offsetY = 0,
+    axisStep = 1,
+    showCodes = true,
+    maxCodeSize = 12,
+    tintAlpha = 0.16
+  } = options;
 
-    columns = computeAdaptiveLegendColumns({
-      availableWidth,
-      itemCount: legendCount,
-      mode: normalizedMode
-    });
-    coordBand = 10;
+  const rows = grid.length;
+  const cols = rows ? grid[0].length : 0;
+  const gridWidth = cols * cellSize;
+  const gridHeight = rows * cellSize;
 
-    const legendRows = Math.max(1, Math.ceil(Math.max(1, legendCount) / columns));
-    legendAreaHeight = legendHeaderGap + legendRows * rowHeight;
-    const usableHeight = pageHeight - margin * 2 - titleGap - legendAreaHeight - coordBand * 2 - 20;
-    const usableWidth = availableWidth - coordBand * 2;
-    cellSize = Math.max(5, Math.floor(Math.min(usableWidth, usableHeight) / gridSize));
-  } else {
-    if (gridSize >= 100) {
-      cellSize = 18;
-    } else if (gridSize >= 80) {
-      cellSize = 20;
-    } else {
-      cellSize = 24;
-    }
+  doc.save();
+  doc.fillColor("#ffffff");
+  doc.rect(startX, startY, gridWidth, gridHeight).fill();
+  doc.restore();
 
-    coordBand = Math.max(12, Math.floor(cellSize * 0.62));
-    const gridBlock = cellSize * gridSize + coordBand * 2;
-
-    pageWidth = Math.max(1300, gridBlock + margin * 2);
-    availableWidth = pageWidth - margin * 2;
-    columns = computeAdaptiveLegendColumns({
-      availableWidth,
-      itemCount: legendCount,
-      mode: normalizedMode
-    });
-    const legendRows = Math.max(1, Math.ceil(Math.max(1, legendCount) / columns));
-    legendAreaHeight = legendHeaderGap + legendRows * rowHeight;
-    pageHeight = Math.max(1000, margin + titleGap + gridBlock + 24 + legendAreaHeight + margin);
-
-    doc = new PDFDocument({
-      size: [pageWidth, pageHeight],
-      margin
-    });
-  }
-
-  const gridWidth = cellSize * gridSize;
-  const gridHeight = gridWidth;
-  const startX = margin + (availableWidth - (gridWidth + coordBand * 2)) / 2 + coordBand;
-  const startY = margin + titleGap + coordBand;
-
-  doc.fontSize(16).fillColor("#111111").text(safeTitle, margin, margin);
-
-  for (let y = 0; y < gridSize; y += 1) {
-    for (let x = 0; x < gridSize; x += 1) {
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
       const hex = grid[y][x];
       if (hex) {
-        doc
-          .rect(startX + x * cellSize, startY + y * cellSize, cellSize, cellSize)
-          .fill(hex);
+        doc.rect(startX + x * cellSize, startY + y * cellSize, cellSize, cellSize).fill(hex);
       }
     }
   }
 
-  const tintAlpha = normalizedMode === "a4" ? 0.12 : 0.18;
-  doc.save();
-  doc.fillOpacity(tintAlpha).fillColor("#FFFFFF");
-  doc.rect(startX, startY, gridWidth, gridHeight).fill();
-  doc.restore();
+  if (tintAlpha > 0) {
+    doc.save();
+    doc.fillOpacity(tintAlpha).fillColor("#FFFFFF");
+    doc.rect(startX, startY, gridWidth, gridHeight).fill();
+    doc.restore();
+  }
 
-  for (let y = 0; y < gridSize; y += 1) {
-    for (let x = 0; x < gridSize; x += 1) {
-      const hex = grid[y][x];
-      const cellCode = codeGrid && codeGrid[y] ? codeGrid[y][x] : null;
-      if (cellCode && hex) {
-        const maxCodeSize = normalizedMode === "a4" ? 10 : 13;
-        const fontSize = Math.max(5, Math.min(maxCodeSize, Math.floor(cellSize * 0.44)));
-        const textY = startY + y * cellSize + (cellSize - fontSize) / 2 - 0.5;
-        doc
-          .fontSize(fontSize)
-          .fillColor(getTextColorForHex(hex))
-          .text(cellCode, startX + x * cellSize, textY, {
-            width: cellSize,
-            align: "center",
-            lineBreak: false
-          });
+  if (showCodes) {
+    for (let y = 0; y < rows; y += 1) {
+      for (let x = 0; x < cols; x += 1) {
+        const hex = grid[y][x];
+        const cellCode = codeGrid && codeGrid[y] ? codeGrid[y][x] : null;
+        if (cellCode && hex) {
+          const fontSize = Math.max(5, Math.min(maxCodeSize, Math.floor(cellSize * 0.44)));
+          const textY = startY + y * cellSize + (cellSize - fontSize) / 2 - 0.5;
+          doc
+            .fontSize(fontSize)
+            .fillColor(getTextColorForHex(hex))
+            .text(cellCode, startX + x * cellSize, textY, {
+              width: cellSize,
+              align: "center",
+              lineBreak: false
+            });
+        }
       }
     }
   }
 
   const thinLineWidth = Math.max(0.35, Math.min(1.2, cellSize * 0.05));
   doc.lineWidth(thinLineWidth).strokeColor("#222222");
-  for (let i = 0; i <= gridSize; i += 1) {
+  for (let i = 0; i <= cols; i += 1) {
     const x = startX + i * cellSize;
     doc.moveTo(x, startY).lineTo(x, startY + gridHeight).stroke();
+  }
+  for (let i = 0; i <= rows; i += 1) {
     const y = startY + i * cellSize;
     doc.moveTo(startX, y).lineTo(startX + gridWidth, y).stroke();
   }
 
   const thickLineWidth = Math.max(1, Math.min(2.4, cellSize * 0.14));
   doc.lineWidth(thickLineWidth).strokeColor("#111111");
-  for (let i = 0; i <= gridSize; i += 5) {
+  for (let i = 0; i <= cols; i += 1) {
+    if (i !== cols && (offsetX + i) % 5 !== 0) continue;
     const x = startX + i * cellSize;
     doc.moveTo(x, startY).lineTo(x, startY + gridHeight).stroke();
+  }
+  for (let i = 0; i <= rows; i += 1) {
+    if (i !== rows && (offsetY + i) % 5 !== 0) continue;
     const y = startY + i * cellSize;
     doc.moveTo(startX, y).lineTo(startX + gridWidth, y).stroke();
   }
 
-  const coordFontSize = Math.max(6, Math.min(8, Math.floor(cellSize * 0.42)));
+  const coordFontSize = Math.max(6, Math.min(10, Math.floor(cellSize * 0.44)));
   const topY = startY - coordBand + (coordBand - coordFontSize) / 2;
   const bottomY = startY + gridHeight + (coordBand - coordFontSize) / 2;
+  const safeAxisStep = Math.max(1, axisStep);
+  const xMarks = [];
+  const yMarks = [];
+  for (let i = 1; i <= cols; i += safeAxisStep) {
+    xMarks.push(i);
+  }
+  for (let i = 1; i <= rows; i += safeAxisStep) {
+    yMarks.push(i);
+  }
+  if (!xMarks.includes(cols)) xMarks.push(cols);
+  if (!yMarks.includes(rows)) yMarks.push(rows);
   doc.fontSize(coordFontSize).fillColor("#111111");
-  for (let i = 1; i <= gridSize; i += 1) {
+  for (const i of xMarks) {
     const centerX = startX + (i - 1) * cellSize;
-    const centerY = startY + (i - 1) * cellSize + (cellSize - coordFontSize) / 2 - 0.5;
-    const label = String(i);
+    const label = String(offsetX + i);
     doc.text(label, centerX, topY, { width: cellSize, align: "center", lineBreak: false });
     doc.text(label, centerX, bottomY, { width: cellSize, align: "center", lineBreak: false });
+  }
+  for (const i of yMarks) {
+    const centerY = startY + (i - 1) * cellSize + (cellSize - coordFontSize) / 2 - 0.5;
+    const label = String(offsetY + i);
     doc.text(label, startX - coordBand + 1, centerY, { width: coordBand - 2, align: "center", lineBreak: false });
     doc.text(label, startX + gridWidth + 1, centerY, { width: coordBand - 2, align: "center", lineBreak: false });
   }
 
-  const legendStartY = startY + gridHeight + 24;
-  doc.fontSize(11).fillColor("#111111");
-  doc.text("Legend", margin, legendStartY - 10);
+  return {
+    rows,
+    cols,
+    gridWidth,
+    gridHeight
+  };
+}
 
-  const safeColumns = Math.max(1, columns);
+function sortLegendByCode(items) {
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+    const aCode = String(a && a.code ? a.code : "");
+    const bCode = String(b && b.code ? b.code : "");
+    if (aCode && bCode) {
+      return aCode.localeCompare(bCode, "en", { numeric: true, sensitivity: "base" });
+    }
+    if (aCode) return -1;
+    if (bCode) return 1;
+    return (b && b.count ? b.count : 0) - (a && a.count ? a.count : 0);
+  });
+}
+
+function buildLegendLookupByHex(legend) {
+  const lookup = new Map();
+  for (const item of Array.isArray(legend) ? legend : []) {
+    const hex = item && (item.hex || item.color);
+    if (!hex || lookup.has(hex)) continue;
+    lookup.set(hex, item);
+  }
+  return lookup;
+}
+
+function buildLegendForSlice(sliceGrid, sliceCodeGrid, legendLookupByHex) {
+  const counts = new Map();
+  const metaByHex = new Map();
+  for (let y = 0; y < sliceGrid.length; y += 1) {
+    const row = sliceGrid[y];
+    for (let x = 0; x < row.length; x += 1) {
+      const hex = row[x];
+      if (!hex) continue;
+      counts.set(hex, (counts.get(hex) || 0) + 1);
+      if (!metaByHex.has(hex)) {
+        const source = legendLookupByHex.get(hex) || null;
+        const codeFromGrid = sliceCodeGrid && sliceCodeGrid[y] ? sliceCodeGrid[y][x] : null;
+        metaByHex.set(hex, {
+          code: codeFromGrid || (source && source.code) || null,
+          name: source && source.name ? source.name : null
+        });
+      }
+    }
+  }
+  const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0) || 1;
+  const legend = Array.from(counts.entries()).map(([hex, count], index) => {
+    const meta = metaByHex.get(hex) || {};
+    return {
+      index: index + 1,
+      hex,
+      color: hex,
+      code: meta.code || null,
+      name: meta.name || null,
+      count,
+      percent: Math.round((count / total) * 1000) / 10
+    };
+  });
+  return sortLegendByCode(legend);
+}
+
+function drawPdfLegendSection(doc, options) {
+  const {
+    legend,
+    margin,
+    availableWidth,
+    startY,
+    mode = "a4",
+    title = "Palette / Beads",
+    compact = false
+  } = options;
+
+  const normalizedMode = normalizePdfMode(mode);
+  const legendGapX = compact ? 6 : (normalizedMode === "a4" ? 8 : 10);
+  const cardHeight = compact ? 24 : (normalizedMode === "a4" ? 34 : 36);
+  const rowHeight = cardHeight + (compact ? 6 : (normalizedMode === "a4" ? 8 : 9));
+  const codeFontSize = compact ? 9 : (normalizedMode === "a4" ? 12 : 13);
+  const metaFontSize = compact ? 8 : (normalizedMode === "a4" ? 10 : 11);
+  const swatchSize = compact ? 9 : (normalizedMode === "a4" ? 12 : 13);
+  const safeLegend = sortLegendByCode(legend || []);
+  const columns = computeAdaptiveLegendColumns({
+    availableWidth,
+    itemCount: safeLegend.length,
+    mode: normalizedMode
+  });
+  const maxColumns = compact ? 6 : columns;
+  const safeColumns = Math.max(1, Math.min(maxColumns, columns));
+  const sectionTitle = String(title || "Palette / Beads");
+  const safeItemCount = Math.max(1, safeLegend.length);
+  const rows = Math.ceil(safeItemCount / safeColumns);
+  const sectionTitleHeight = compact ? 12 : 14;
+  const sectionPaddingBottom = compact ? 2 : 4;
+  if (!safeLegend.length) {
+    doc.fontSize(compact ? 8 : 11).fillColor("#111111").text(sectionTitle, margin, startY - sectionTitleHeight);
+    doc.fontSize(compact ? 8 : 10).fillColor("#666666").text("No colors on this page", margin, startY + 2);
+    return sectionTitleHeight + rowHeight + sectionPaddingBottom;
+  }
   const colWidth = Math.floor((availableWidth - legendGapX * (safeColumns - 1)) / safeColumns);
+
+  doc.fontSize(compact ? 8 : 11).fillColor("#111111").text(sectionTitle, margin, startY - sectionTitleHeight);
+
   safeLegend.forEach((item, idx) => {
     const col = idx % safeColumns;
     const row = Math.floor(idx / safeColumns);
     const cardX = margin + col * (colWidth + legendGapX);
-    const cardY = legendStartY + row * rowHeight;
-    const cardWidth = colWidth;
-
-    doc.save();
-    doc.lineWidth(0.7).strokeColor("#d7c8ad").fillColor("#fffaf1");
-    doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 6).fillAndStroke();
-    doc.restore();
-
+    const cardY = startY + row * rowHeight;
     const swatchHex = item.hex || item.color || "#000000";
     const code = item.code || `#${item.index}`;
-    const swatchY = cardY + Math.floor((cardHeight - legendSwatchSize) / 2);
-    doc.rect(cardX + 10, swatchY, legendSwatchSize, legendSwatchSize).fill(swatchHex);
-    doc.fontSize(legendCodeFontSize).fillColor("#1f1f1f").text(code, cardX + 29, cardY + 5, {
-      width: cardWidth - 35,
+
+    doc.save();
+    doc.lineWidth(compact ? 0.5 : 0.7).strokeColor("#d7c8ad").fillColor("#fffaf1");
+    doc.roundedRect(cardX, cardY, colWidth, cardHeight, 6).fillAndStroke();
+    doc.restore();
+
+    const swatchY = cardY + Math.floor((cardHeight - swatchSize) / 2);
+    doc.rect(cardX + 10, swatchY, swatchSize, swatchSize).fill(swatchHex);
+    const textStartX = compact ? cardX + 23 : cardX + 29;
+    const textWidth = compact ? colWidth - 26 : colWidth - 35;
+    doc.fontSize(codeFontSize).fillColor("#1f1f1f").text(code, textStartX, compact ? cardY + 3 : cardY + 5, {
+      width: textWidth,
       lineBreak: false
     });
-    doc.fontSize(legendMetaFontSize).fillColor("#4d4d4d").text(`${item.count} 颗 (${item.percent}%)`, cardX + 29, cardY + 19, {
-      width: cardWidth - 35,
+    doc.fontSize(metaFontSize).fillColor("#4d4d4d").text(`${item.count} beads`, textStartX, compact ? cardY + 13 : cardY + 19, {
+      width: textWidth,
       lineBreak: false
     });
+    if (!compact) {
+      doc.fontSize(metaFontSize).fillColor("#6a6a6a").text(`${item.percent}%`, textStartX + Math.max(30, textWidth - 48), cardY + 19, {
+        width: 44,
+        align: "right",
+        lineBreak: false
+      });
+    }
   });
 
+  return sectionTitleHeight + rows * rowHeight + sectionPaddingBottom;
+}
+
+function formatPatternHeaderTitle(title, width, height, colorCount, beadCount) {
+  const safeTitle = sanitizePdfTitle(title || "Bead Pattern");
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const safeColors = Math.max(0, Number(colorCount) || 0);
+  const safeBeads = Math.max(0, Number(beadCount) || 0);
+  return `${safeTitle} [${safeWidth}x${safeHeight}/${safeColors} colors/${safeBeads} beads]`;
+}
+
+function computeLegendBlockHeight({ itemCount, availableWidth, mode, compact = false }) {
+  const normalizedMode = normalizePdfMode(mode);
+  const columns = computeAdaptiveLegendColumns({
+    availableWidth,
+    itemCount,
+    mode: normalizedMode
+  });
+  const safeColumns = Math.max(1, Math.min(compact ? 6 : columns, columns));
+  const rows = Math.ceil(Math.max(1, itemCount) / safeColumns);
+  const rowHeight = compact
+    ? 30
+    : (normalizedMode === "a4" ? 42 : 45);
+  const titleHeight = compact ? 12 : 14;
+  const bottomPadding = compact ? 2 : 4;
+  return titleHeight + rows * rowHeight + bottomPadding;
+}
+
+function drawPdfTileTitle(doc, options) {
+  const {
+    title,
+    margin,
+    pageWidth,
+    startCol,
+    startRow,
+    cols,
+    rows,
+    pageIndex,
+    totalPages,
+    sliceLegend
+  } = options;
+  const beadCount = Array.isArray(sliceLegend)
+    ? sliceLegend.reduce((sum, item) => sum + (item && item.count ? item.count : 0), 0)
+    : 0;
+  const headerText = formatPatternHeaderTitle(
+    `${title} [Page ${pageIndex}]`,
+    cols,
+    rows,
+    Array.isArray(sliceLegend) ? sliceLegend.length : 0,
+    beadCount
+  );
+
+  doc.fontSize(14).fillColor("#111111").text(headerText, margin, margin);
+  doc.fontSize(9).fillColor("#6e5d47").text(
+    `Crop X ${startCol + 1}-${startCol + cols} · Y ${startRow + 1}-${startRow + rows} · Page ${pageIndex}/${totalPages}`,
+    margin,
+    margin + 18,
+    {
+      width: pageWidth - margin * 2
+    }
+  );
+}
+
+function drawPdfTileMiniMap(doc, options) {
+  const {
+    x,
+    y,
+    size,
+    gridSize,
+    startRow,
+    startCol,
+    rows,
+    cols
+  } = options;
+  const scale = size / gridSize;
+
+  doc.save();
+  doc.fillColor("#fbf5ea").strokeColor("#d7c8ad").lineWidth(1);
+  doc.rect(x, y, size, size).fillAndStroke();
+  doc.restore();
+
+  doc.lineWidth(0.4).strokeColor("#cbbba4");
+  for (let i = 5; i < gridSize; i += 5) {
+    const lineX = x + i * scale;
+    const lineY = y + i * scale;
+    doc.moveTo(lineX, y).lineTo(lineX, y + size).stroke();
+    doc.moveTo(x, lineY).lineTo(x + size, lineY).stroke();
+  }
+
+  doc.save();
+  doc.fillOpacity(0.22).fillColor("#ffb866");
+  doc.rect(x + startCol * scale, y + startRow * scale, cols * scale, rows * scale).fill();
+  doc.restore();
+
+  doc.lineWidth(1.4).strokeColor("#ba1f1f");
+  doc.rect(x + startCol * scale, y + startRow * scale, cols * scale, rows * scale).stroke();
+}
+
+function renderPdfOverviewPage(doc, options) {
+  const {
+    grid,
+    legend,
+    title,
+    codeGrid,
+    mode,
+    detailPlan,
+    paperSize
+  } = options;
+  const gridSize = grid.length;
+  const normalizedMode = normalizePdfMode(mode);
+  const margin = normalizedMode === "a4" ? 30 : 42;
+  const titleGap = 36;
+  const safeLegend = sortLegendByCode(legend || []);
+  const legendCount = safeLegend.length;
+  const pageWidth = doc.page.width;
+  const pageHeight = doc.page.height;
+  const availableWidth = pageWidth - margin * 2;
+  const totalBeads = safeLegend.reduce((sum, item) => sum + (item && item.count ? item.count : 0), 0);
+  const overviewTitle = formatPatternHeaderTitle(title, gridSize, gridSize, legendCount, totalBeads);
+
+  if (normalizedMode !== "a4") {
+    throw new Error("Overview page only supports A4 mode");
+  }
+
+  const coordBand = 10;
+  const legendAreaHeight = computeLegendBlockHeight({
+    itemCount: legendCount,
+    availableWidth,
+    mode: normalizedMode,
+    compact: false
+  });
+  const usableHeight = pageHeight - margin * 2 - titleGap - legendAreaHeight - coordBand * 2 - 20;
+  const usableWidth = availableWidth - coordBand * 2;
+  const cellSize = Math.max(5, Math.floor(Math.min(usableWidth, usableHeight) / gridSize));
+  const gridWidth = cellSize * gridSize;
+  const startX = margin + (availableWidth - (gridWidth + coordBand * 2)) / 2 + coordBand;
+  const startY = margin + titleGap + coordBand;
+
+  doc.fontSize(16).fillColor("#111111").text(overviewTitle, margin, margin, {
+    width: availableWidth,
+    lineBreak: false
+  });
+  const detailPages = detailPlan.pagesX * detailPlan.pagesY;
+  doc.fontSize(10).fillColor("#6e5d47").text(
+    detailPages > 1
+      ? `Overview · ${detailPages} detail pages on ${normalizePdfPaperSize(paperSize)} · approx ${detailPlan.cellsPerPage}x${detailPlan.cellsPerPage} cells/page`
+      : "Overview",
+    margin,
+    margin + 18
+  );
+
+  drawPdfGridBlock(doc, {
+    grid,
+    codeGrid,
+    startX,
+    startY,
+    cellSize,
+    coordBand,
+    axisStep: gridSize > 60 ? 5 : 1,
+    showCodes: true,
+    maxCodeSize: 10,
+    tintAlpha: 0.12
+  });
+
+  if (detailPages > 1) {
+    doc.save();
+    doc.lineWidth(Math.max(1.1, cellSize * 0.15)).strokeColor("#ba1f1f").strokeOpacity(0.82);
+    for (let i = detailPlan.cellsPerPage; i < gridSize; i += detailPlan.cellsPerPage) {
+      const x = startX + i * cellSize;
+      const y = startY + i * cellSize;
+      doc.moveTo(x, startY).lineTo(x, startY + gridWidth).stroke();
+      doc.moveTo(startX, y).lineTo(startX + gridWidth, y).stroke();
+    }
+    doc.restore();
+  }
+
+  drawPdfLegendSection(doc, {
+    legend: safeLegend,
+    margin,
+    availableWidth,
+    startY: startY + gridWidth + 24,
+    mode: normalizedMode,
+    title: "Full Pattern Palette / Beads"
+  });
+}
+
+function appendPdfDetailPages(doc, options) {
+  const {
+    grid,
+    codeGrid,
+    title,
+    detailPlan,
+    legend,
+    mode,
+    paperSize
+  } = options;
+  const totalPages = detailPlan.pagesX * detailPlan.pagesY;
+  if (totalPages <= 1) return;
+
+  const normalizedMode = normalizePdfMode(mode);
+  const normalizedPaperSize = normalizePdfPaperSize(paperSize);
+  const margin = normalizedMode === "a4" ? 30 : 42;
+  const legendLookupByHex = buildLegendLookupByHex(legend);
+
+  for (let pageY = 0; pageY < detailPlan.pagesY; pageY += 1) {
+    for (let pageX = 0; pageX < detailPlan.pagesX; pageX += 1) {
+      doc.addPage({
+        size: normalizedPaperSize,
+        margin
+      });
+
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const coordBand = 16;
+      const headerHeight = 66;
+      const footerHeight = 18;
+      const startCol = pageX * detailPlan.cellsPerPage;
+      const startRow = pageY * detailPlan.cellsPerPage;
+      const cols = Math.min(detailPlan.cellsPerPage, grid.length - startCol);
+      const rows = Math.min(detailPlan.cellsPerPage, grid.length - startRow);
+      const sliceGrid = grid.slice(startRow, startRow + rows).map((row) => row.slice(startCol, startCol + cols));
+      const sliceCodeGrid = codeGrid
+        ? codeGrid.slice(startRow, startRow + rows).map((row) => row.slice(startCol, startCol + cols))
+        : null;
+      const sliceLegend = buildLegendForSlice(sliceGrid, sliceCodeGrid, legendLookupByHex);
+
+      const availableWidth = pageWidth - margin * 2 - coordBand * 2;
+      const legendAreaHeight = computeLegendBlockHeight({
+        itemCount: sliceLegend.length,
+        availableWidth: pageWidth - margin * 2,
+        mode: normalizedMode,
+        compact: true
+      });
+      const availableHeight = pageHeight - margin * 2 - headerHeight - footerHeight - coordBand * 2 - legendAreaHeight - 16;
+      const cellSize = Math.max(11, Math.floor(Math.min(availableWidth / cols, availableHeight / rows)));
+      const gridWidth = cols * cellSize;
+      const gridHeight = rows * cellSize;
+      const startX = margin + (pageWidth - margin * 2 - (gridWidth + coordBand * 2)) / 2 + coordBand;
+      const startY = margin + headerHeight + coordBand;
+      const pageIndex = pageY * detailPlan.pagesX + pageX + 1;
+
+      drawPdfTileTitle(doc, {
+        title,
+        margin,
+        pageWidth,
+        startCol,
+        startRow,
+        cols,
+        rows,
+        pageIndex,
+        totalPages,
+        sliceLegend
+      });
+
+      drawPdfTileMiniMap(doc, {
+        x: pageWidth - margin - 82,
+        y: margin + 4,
+        size: 78,
+        gridSize: grid.length,
+        startRow,
+        startCol,
+        rows,
+        cols
+      });
+
+      drawPdfGridBlock(doc, {
+        grid: sliceGrid,
+        codeGrid: sliceCodeGrid,
+        startX,
+        startY,
+        cellSize,
+        coordBand,
+        offsetX: startCol,
+        offsetY: startRow,
+        showCodes: true,
+        maxCodeSize: 11,
+        tintAlpha: 0.1
+      });
+
+      drawPdfLegendSection(doc, {
+        legend: sliceLegend,
+        margin,
+        availableWidth: pageWidth - margin * 2,
+        startY: startY + gridHeight + 22,
+        mode: normalizedMode,
+        title: "Page Palette / Beads",
+        compact: true
+      });
+
+      doc.fontSize(8.5).fillColor("#6e5d47").text(
+        `${normalizedPaperSize} · Page ${pageIndex}/${totalPages}`,
+        margin,
+        pageHeight - margin - 10,
+        { width: pageWidth - margin * 2, align: "right", lineBreak: false }
+      );
+    }
+  }
+}
+
+function renderPdfFromGrid({ grid, legend, title, codeGrid, mode = "a4", paperSize = "A4" }) {
+  const gridSize = grid.length;
+  const normalizedMode = normalizePdfMode(mode);
+  const normalizedPaperSize = normalizePdfPaperSize(paperSize);
+  const safeLegend = sortLegendByCode(legend || []);
+  const totalBeads = safeLegend.reduce((sum, item) => sum + (item && item.count ? item.count : 0), 0);
+  const coverTitle = formatPatternHeaderTitle(title, gridSize, gridSize, safeLegend.length, totalBeads);
+
+  if (normalizedMode === "ultra") {
+    const margin = 42;
+    const cellSize = gridSize >= 100 ? 18 : gridSize >= 80 ? 20 : 24;
+    const coordBand = Math.max(12, Math.floor(cellSize * 0.62));
+    const gridBlock = cellSize * gridSize + coordBand * 2;
+    const pageWidth = Math.max(1300, gridBlock + margin * 2);
+    const availableWidth = pageWidth - margin * 2;
+    const columns = computeAdaptiveLegendColumns({
+      availableWidth,
+      itemCount: safeLegend.length,
+      mode: normalizedMode
+    });
+    const legendRows = Math.max(1, Math.ceil(Math.max(1, safeLegend.length) / Math.max(1, columns)));
+    const legendAreaHeight = 52 + legendRows * 45;
+    const pageHeight = Math.max(1000, margin + 34 + gridBlock + 24 + legendAreaHeight + margin);
+    const doc = new PDFDocument({
+      size: [pageWidth, pageHeight],
+      margin
+    });
+
+    const startX = margin + (availableWidth - (cellSize * gridSize + coordBand * 2)) / 2 + coordBand;
+    const startY = margin + 34 + coordBand;
+    doc.fontSize(16).fillColor("#111111").text(coverTitle, margin, margin, {
+      width: availableWidth,
+      lineBreak: false
+    });
+    drawPdfGridBlock(doc, {
+      grid,
+      codeGrid,
+      startX,
+      startY,
+      cellSize,
+      coordBand,
+      axisStep: 1,
+      showCodes: true,
+      maxCodeSize: 13,
+      tintAlpha: 0.18
+    });
+    drawPdfLegendSection(doc, {
+      legend: safeLegend,
+      margin,
+      availableWidth,
+      startY: startY + cellSize * gridSize + 24,
+      mode: normalizedMode,
+      title: "Full Pattern Palette / Beads"
+    });
+    return doc;
+  }
+
+  const doc = new PDFDocument({
+    size: normalizedPaperSize,
+    margin: 30
+  });
+  const detailPlan = computePagedDetailPlan({
+    gridSize,
+    paperSize: normalizedPaperSize
+  });
+  renderPdfOverviewPage(doc, {
+    grid,
+    legend: safeLegend,
+    title: sanitizePdfTitle(title || "Bead Pattern"),
+    codeGrid,
+    mode: normalizedMode,
+    detailPlan,
+    paperSize: normalizedPaperSize
+  });
+  appendPdfDetailPages(doc, {
+    grid,
+    codeGrid,
+    title: sanitizePdfTitle(title || "Bead Pattern"),
+    detailPlan,
+    legend: safeLegend,
+    mode: normalizedMode,
+    paperSize: normalizedPaperSize
+  });
   return doc;
 }
 
@@ -1312,10 +2134,10 @@ function countNonEmptyGridCells(grid) {
   return count;
 }
 
-function createPdfBufferFromGrid({ grid, legend, title, codeGrid, mode = "ultra" }) {
+function createPdfBufferFromGrid({ grid, legend, title, codeGrid, mode = "a4", paperSize = "A4" }) {
   return new Promise((resolve, reject) => {
     try {
-      const doc = renderPdfFromGrid({ grid, legend, title, codeGrid, mode });
+      const doc = renderPdfFromGrid({ grid, legend, title, codeGrid, mode, paperSize });
       const chunks = [];
 
       doc.on("data", (chunk) => {
@@ -1335,21 +2157,23 @@ function createPdfBufferFromGrid({ grid, legend, title, codeGrid, mode = "ultra"
   });
 }
 
-async function sendPdfDownload(res, { grid, legend, title, codeGrid, mode, filename, logTag }) {
-  const normalizedMode = mode === "a4" ? "a4" : "ultra";
+async function sendPdfDownload(res, { grid, legend, title, codeGrid, mode, paperSize, filename, logTag }) {
+  const normalizedMode = normalizePdfMode(mode);
+  const normalizedPaperSize = normalizePdfPaperSize(paperSize);
   const safeFilename = filename || "bead-pattern.pdf";
   const pdfBuffer = await createPdfBufferFromGrid({
     grid,
     legend,
     title,
     codeGrid,
-    mode: normalizedMode
+    mode: normalizedMode,
+    paperSize: normalizedPaperSize
   });
 
   const usedCells = countNonEmptyGridCells(grid);
   const legendCount = Array.isArray(legend) ? legend.length : 0;
   console.log(
-    `[${logTag || "pdf-export"}] mode=${normalizedMode} grid=${grid.length} used=${usedCells} legend=${legendCount} bytes=${pdfBuffer.length}`
+    `[${logTag || "pdf-export"}] mode=${normalizedMode} paper=${normalizedPaperSize} grid=${grid.length} used=${usedCells} legend=${legendCount} bytes=${pdfBuffer.length}`
   );
 
   res.status(200);
@@ -1369,7 +2193,7 @@ app.get("/api/palettes", (req, res) => {
 
 app.post("/api/export-pdf", async (req, res) => {
   try {
-    const { grid, legend, codeGrid, title, pdfMode } = req.body || {};
+    const { grid, legend, codeGrid, title, pdfMode, pdfPaperSize } = req.body || {};
     if (!Array.isArray(grid) || !grid.length || !Array.isArray(grid[0])) {
       return res.status(400).json({ error: "缺少有效网格数据。" });
     }
@@ -1380,8 +2204,9 @@ app.post("/api/export-pdf", async (req, res) => {
       legend: safeLegend,
       title: title || "Bead Pattern",
       codeGrid: codeGrid || null,
-      mode: pdfMode === "a4" ? "a4" : "ultra",
-      filename: "bead-pattern-ultra.pdf",
+      mode: normalizePdfMode(pdfMode),
+      paperSize: normalizePdfPaperSize(pdfPaperSize),
+      filename: "bead-pattern.pdf",
       logTag: "export-pdf"
     });
   } catch (error) {
@@ -1406,13 +2231,15 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
       const legend = req.body.legend || buildLegend(grid);
       const title = req.body.title || "Bead Pattern";
       const codeGrid = req.body.codeGrid || null;
-      const pdfMode = req.body.pdfMode === "a4" ? "a4" : "ultra";
+      const pdfMode = normalizePdfMode(req.body.pdfMode);
+      const pdfPaperSize = normalizePdfPaperSize(req.body.pdfPaperSize);
       await sendPdfDownload(res, {
         grid,
         legend,
         title,
         codeGrid,
         mode: pdfMode,
+        paperSize: pdfPaperSize,
         filename: "bead-pattern.pdf",
         logTag: "generate-grid-pdf"
       });
@@ -1439,6 +2266,14 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
     const beta = DEFAULT_BEADABILITY_WEIGHT;
     const optimize = req.body.optimize !== "false";
     const optimizePasses = clampNumber(req.body.optimizePasses, 1, 3, 1);
+    const similarityThresholdRaw = Number(
+      req.body.similarityThreshold !== undefined
+        ? req.body.similarityThreshold
+        : req.body.mergeDeltaE
+    );
+    const similarityThreshold = Number.isFinite(similarityThresholdRaw)
+      ? Math.max(4, Math.min(80, similarityThresholdRaw))
+      : 30;
 
     const palette = pickPalette(paletteId);
 
@@ -1454,17 +2289,20 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
       alpha,
       beta,
       optimize,
-      optimizePasses
+      optimizePasses,
+      similarityThreshold
     });
 
     if (output === "pdf") {
-      const pdfMode = req.body.pdfMode === "a4" ? "a4" : "ultra";
+      const pdfMode = normalizePdfMode(req.body.pdfMode);
+      const pdfPaperSize = normalizePdfPaperSize(req.body.pdfPaperSize);
       await sendPdfDownload(res, {
         grid: result.grid,
         legend: result.legend,
         title: "Bead Pattern",
         codeGrid: result.codeGrid,
         mode: pdfMode,
+        paperSize: pdfPaperSize,
         filename: "bead-pattern.pdf",
         logTag: "generate-image-pdf"
       });

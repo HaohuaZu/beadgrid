@@ -1,9 +1,9 @@
 const {
-  FINE_PALETTE,
   quantizeToPalette,
   formatGridDate
 } = require("../../utils/pixel-converter");
 const { packIndexGrid } = require("../../utils/grid-pack");
+const { MARD221_COLORS } = require("../../utils/mard221");
 
 const STORAGE_KEY = "bead_work_library_v1";
 const BACKUP_STORAGE_KEY = "bead_work_library_backup_v1";
@@ -14,7 +14,11 @@ const MAX_EDITABLE_WORKS = 12;
 const MAX_EDITOR_CELLS = 40000;
 const DEFAULT_EDITOR_BG = "#FFFFFF";
 const EDITOR_DATA_SCHEMA_VERSION = 3;
-const PALETTE_INDEX_BY_HEX = FINE_PALETTE.reduce((acc, item, index) => {
+const EDITOR_PALETTE = (Array.isArray(MARD221_COLORS) ? MARD221_COLORS : [])
+  .filter((item) => item && item.hex)
+  .sort((a, b) => (Number(a.order || 0) - Number(b.order || 0)));
+const EDITOR_MAX_INDEX = Math.max(0, EDITOR_PALETTE.length - 1);
+const PALETTE_INDEX_BY_HEX = EDITOR_PALETTE.reduce((acc, item, index) => {
   if (item && item.hex) {
     acc[item.hex.toUpperCase()] = index;
   }
@@ -182,16 +186,16 @@ Page({
         const idx = Number(item);
         if (!Number.isFinite(idx)) return 0;
         if (idx < -1) return -1;
-        return idx >= FINE_PALETTE.length ? 0 : idx;
+        return idx >= EDITOR_PALETTE.length ? 0 : idx;
       });
-      indexGridPacked = packIndexGrid(normalized, FINE_PALETTE.length - 1);
+      indexGridPacked = packIndexGrid(normalized, EDITOR_MAX_INDEX);
     }
     if (!indexGridPacked || indexGridPacked.length < cellCount * 2) return null;
 
     const usedColorIndexes = Array.isArray(editorData.usedColorIndexes)
       ? [...new Set(editorData.usedColorIndexes
         .map((item) => Number(item))
-        .filter((idx) => Number.isFinite(idx) && idx >= 0 && idx < FINE_PALETTE.length))]
+        .filter((idx) => Number.isFinite(idx) && idx >= 0 && idx < EDITOR_PALETTE.length))]
       : [];
     const normalizedVersion = Math.max(1, Number(editorData.version) || 1);
     const userEdited = Boolean(editorData.userEdited);
@@ -204,7 +208,8 @@ Page({
         ? usedColorIndexes
         : [],
       backgroundHex: editorData.backgroundHex || DEFAULT_EDITOR_BG,
-      userEdited
+      userEdited,
+      paletteVersion: typeof editorData.paletteVersion === "string" ? editorData.paletteVersion : ""
     };
   },
   normalizeWork(work, index = 0) {
@@ -905,8 +910,8 @@ Page({
     const output = new Array(targetWidth * targetHeight);
     const upscale = targetWidth >= sourceWidth && targetHeight >= sourceHeight;
     const rgbByHex = Object.create(null);
-    for (let i = 0; i < FINE_PALETTE.length; i += 1) {
-      const item = FINE_PALETTE[i];
+    for (let i = 0; i < EDITOR_PALETTE.length; i += 1) {
+      const item = EDITOR_PALETTE[i];
       if (!item || !item.hex) continue;
       rgbByHex[item.hex.toUpperCase()] = item.rgb || parseHexRgb(item.hex);
     }
@@ -1131,10 +1136,11 @@ Page({
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
         gridSize: maxEdge,
-        indexGridPacked: packIndexGrid(indexGrid, FINE_PALETTE.length - 1),
+        indexGridPacked: packIndexGrid(indexGrid, EDITOR_MAX_INDEX),
         usedColorIndexes,
         backgroundHex: DEFAULT_EDITOR_BG,
         userEdited: false,
+        paletteVersion: "mard221",
         visibleBounds: {
           minCol: squareResult.offsetX,
           minRow: squareResult.offsetY,

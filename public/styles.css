@@ -564,6 +564,109 @@ button:disabled {
   opacity: 1;
 }
 
+.export-modal-card {
+  width: min(94vw, 1180px);
+  height: min(90vh, 860px);
+}
+
+.export-modal-header {
+  align-items: flex-start;
+}
+
+.export-modal-header h3 {
+  margin: 0 0 4px;
+}
+
+.export-modal-subhead {
+  margin: 0;
+  color: #6a5a45;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.export-modal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 340px);
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+}
+
+.export-preview-panel,
+.export-controls-panel {
+  min-height: 0;
+  border-radius: 16px;
+  border: 1px solid #e9dcc8;
+  background: linear-gradient(180deg, #fffdfa 0%, #fff5e8 100%);
+}
+
+.export-preview-panel {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.export-preview-head h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.export-preview-head p {
+  margin: 0;
+  color: #6a5a45;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+#exportPreviewCanvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  border-radius: 14px;
+  border: 1px solid #ddd0bc;
+  background: linear-gradient(180deg, #fbf4e9 0%, #f1e5d1 100%);
+}
+
+.export-large-hint {
+  margin: 0;
+  min-height: 18px;
+  color: #7a4c1a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.export-controls-panel {
+  padding: 16px;
+  overflow: auto;
+}
+
+.export-info-card {
+  margin-top: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid #ebdcc3;
+}
+
+.export-info-card p {
+  margin: 0;
+  color: #5e4e37;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.export-actions-row {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.export-actions-row button {
+  width: 100%;
+  justify-content: center;
+}
+
 .export-hint {
   margin: 2px 0 8px;
   color: #645843;
@@ -1244,6 +1347,14 @@ button:disabled {
     border-radius: 14px;
   }
 
+  .export-modal-card {
+    height: 92vh;
+  }
+
+  .export-modal-body {
+    grid-template-columns: 1fr;
+  }
+
   .crop-modal-card {
     width: 96vw;
     height: 93vh;
@@ -1393,5 +1504,10 @@ button:disabled {
     min-height: 40px;
     padding: 8px 10px;
     font-size: 13px;
+  }
+
+  .export-preview-panel,
+  .export-controls-panel {
+    border-radius: 14px;
   }
 }
