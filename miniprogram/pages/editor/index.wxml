@@ -50,37 +50,38 @@
     </view>
   </view>
   <view wx:if="{{viewMode === 'edit'}}" class="tool-rail brand-panel">
+    <view class="tool-title">工具</view>
     <scroll-view class="tool-scroll" scroll-x="true" enable-flex="true" show-scrollbar="false">
       <view class="tool-inline">
         <view class="tool-chip {{currentTool === 'paint' ? 'is-active' : ''}}" data-tool="paint" bindtap="handleSwitchTool">
-          <text class="tool-emoji">✎</text>
+          <text class="tool-icon">✎</text>
           <text>画笔</text>
         </view>
         <view class="tool-chip tool-erase {{currentTool === 'erase' ? 'is-active' : ''}}">
           <view class="tool-erase-main" data-tool="erase" bindtap="handleSwitchTool">
-            <text class="tool-emoji">⌫</text>
+            <text class="tool-icon">⌫</text>
             <text>{{eraserMode === 'flood' ? '大橡皮' : '橡皮'}}</text>
           </view>
           <view class="tool-erase-more" catchtap="handleToggleEraserMenu">▾</view>
         </view>
         <view class="tool-chip {{currentTool === 'pick' ? 'is-active' : ''}}" data-tool="pick" bindtap="handleSwitchTool">
-          <text class="tool-emoji">◎</text>
+          <text class="tool-icon">◎</text>
           <text>取色</text>
         </view>
         <view class="tool-chip {{currentTool === 'bucket' ? 'is-active' : ''}}" data-tool="bucket" bindtap="handleSwitchTool">
-          <text class="tool-emoji">▣</text>
+          <text class="tool-icon">▣</text>
           <text>油漆桶</text>
         </view>
         <view class="tool-chip tool-action" data-action="denoise" bindtap="handleQuickAction">
-          <text class="tool-emoji">◇</text>
+          <text class="tool-icon">◇</text>
           <text>去杂色</text>
         </view>
         <view class="tool-chip tool-action" data-action="replaceColor" bindtap="handleQuickAction">
-          <text class="tool-emoji">↺</text>
+          <text class="tool-icon">↺</text>
           <text>批量换色</text>
         </view>
         <view class="tool-chip tool-action tool-danger" data-action="clearCanvas" bindtap="handleQuickAction">
-          <text class="tool-emoji">✕</text>
+          <text class="tool-icon">✕</text>
           <text>清空</text>
         </view>
       </view>
