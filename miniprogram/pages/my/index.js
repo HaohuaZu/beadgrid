@@ -164,8 +164,18 @@ Page({
     if (!matched) return 0;
     const width = Number(matched[1]) || 0;
     const height = Number(matched[2]) || 0;
-    if (width <= 0 || height <= 0 || width !== height) return 0;
-    return width;
+    if (width <= 0 || height <= 0) return 0;
+    return Math.max(width, height);
+  },
+  normalizeVisibleBoundsForEditor(rawBounds, gridSize) {
+    const size = Math.max(1, Number(gridSize) || 0);
+    if (!size || !rawBounds || typeof rawBounds !== "object") return null;
+    const minCol = clamp(Math.floor(Number(rawBounds.minCol) || 0), 0, size - 1);
+    const minRow = clamp(Math.floor(Number(rawBounds.minRow) || 0), 0, size - 1);
+    const maxCol = clamp(Math.floor(Number(rawBounds.maxCol) || (size - 1)), minCol, size - 1);
+    const maxRow = clamp(Math.floor(Number(rawBounds.maxRow) || (size - 1)), minRow, size - 1);
+    if (maxCol - minCol + 1 >= size && maxRow - minRow + 1 >= size) return null;
+    return { minCol, minRow, maxCol, maxRow };
   },
   normalizeEditorData(editorData, sizeText) {
     if (!editorData || typeof editorData !== "object") return null;
@@ -209,7 +219,8 @@ Page({
         : [],
       backgroundHex: editorData.backgroundHex || DEFAULT_EDITOR_BG,
       userEdited,
-      paletteVersion: typeof editorData.paletteVersion === "string" ? editorData.paletteVersion : ""
+      paletteVersion: typeof editorData.paletteVersion === "string" ? editorData.paletteVersion : "",
+      visibleBounds: this.normalizeVisibleBoundsForEditor(editorData.visibleBounds, gridSize)
     };
   },
   normalizeWork(work, index = 0) {
@@ -852,13 +863,86 @@ Page({
       ctx.drawImage(imagePath, drawX, drawY, patternWidth, patternHeight);
     });
 
-    return this.canvasGetImageDataAsync("processCanvas", gridSize, gridSize);
+    const imageData = await this.canvasGetImageDataAsync("processCanvas", gridSize, gridSize);
+    return {
+      imageData,
+      sourceRect: {
+        drawX,
+        drawY,
+        drawWidth: patternWidth,
+        drawHeight: patternHeight
+      }
+    };
   },
-  isBackgroundHex(hex) {
+  isNearWhiteHex(hex) {
+    const rgb = parseHexRgb(hex);
+    const luminance = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+    const span = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+    return luminance >= 236 && span <= 30;
+  },
+  buildBackgroundHexProfileFromHexGrid(hexGrid, width, height) {
+    const profile = {
+      set: Object.create(null),
+      primaryHex: "#FFFFFF"
+    };
+    profile.set["#FFFFFF"] = true;
+    if (!Array.isArray(hexGrid) || !width || !height || hexGrid.length < width * height) return profile;
+
+    const counter = Object.create(null);
+    const push = (hex) => {
+      const safeHex = String(hex || "#FFFFFF").toUpperCase();
+      counter[safeHex] = (counter[safeHex] || 0) + 1;
+      if (this.isNearWhiteHex(safeHex)) {
+        profile.set[safeHex] = true;
+      }
+    };
+
+    for (let x = 0; x < width; x += 1) {
+      push(hexGrid[x]);
+      push(hexGrid[(height - 1) * width + x]);
+    }
+    for (let y = 1; y < height - 1; y += 1) {
+      push(hexGrid[y * width]);
+      push(hexGrid[y * width + (width - 1)]);
+    }
+
+    const entries = Object.keys(counter).map((hex) => ({
+      hex,
+      count: counter[hex]
+    })).sort((a, b) => b.count - a.count);
+    if (!entries.length) return profile;
+
+    const borderTotal = Math.max(1, width * 2 + Math.max(0, height - 2) * 2);
+    const top = entries[0];
+    if (top && top.count >= Math.max(8, Math.floor(borderTotal * 0.18))) {
+      profile.set[top.hex] = true;
+    }
+    for (let i = 1; i < entries.length && i < 4; i += 1) {
+      const item = entries[i];
+      if (!this.isNearWhiteHex(item.hex)) continue;
+      if (item.count < Math.max(5, Math.floor(top.count * 0.42))) continue;
+      profile.set[item.hex] = true;
+    }
+
+    if (profile.set[top.hex]) {
+      profile.primaryHex = top.hex;
+      return profile;
+    }
+    if (top && this.isNearWhiteHex(top.hex)) {
+      profile.primaryHex = top.hex;
+      return profile;
+    }
+    profile.primaryHex = "#FFFFFF";
+    return profile;
+  },
+  isBackgroundHex(hex, backgroundSet = null) {
     const safeHex = String(hex || "").toUpperCase();
+    if (backgroundSet && typeof backgroundSet === "object") {
+      return Boolean(backgroundSet[safeHex]);
+    }
     return safeHex === "#FFFFFF";
   },
-  computeContentBoundsFromHexGrid(hexGrid, width, height) {
+  computeContentBoundsFromHexGrid(hexGrid, width, height, backgroundSet = null) {
     if (!Array.isArray(hexGrid) || !width || !height) return null;
     let minX = width;
     let minY = height;
@@ -867,7 +951,7 @@ Page({
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
         const hex = hexGrid[y * width + x];
-        if (this.isBackgroundHex(hex)) continue;
+        if (this.isBackgroundHex(hex, backgroundSet)) continue;
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -875,6 +959,103 @@ Page({
       }
     }
     if (maxX < minX || maxY < minY) return null;
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1
+    };
+  },
+  computePrimaryContentBoundsFromHexGrid(hexGrid, width, height, backgroundSet = null) {
+    if (!Array.isArray(hexGrid) || !width || !height || hexGrid.length < width * height) return null;
+    const total = width * height;
+    const visited = new Uint8Array(total);
+    const queue = new Int32Array(total);
+    let best = null;
+
+    for (let start = 0; start < total; start += 1) {
+      if (visited[start]) continue;
+      const seedHex = hexGrid[start];
+      if (this.isBackgroundHex(seedHex, backgroundSet)) continue;
+
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      let count = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+
+      while (head < tail) {
+        const current = queue[head++];
+        const y = Math.floor(current / width);
+        const x = current - y * width;
+        const hex = hexGrid[current];
+        if (this.isBackgroundHex(hex, backgroundSet)) continue;
+
+        count += 1;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+
+        if (x > 0) {
+          const left = current - 1;
+          if (!visited[left] && !this.isBackgroundHex(hexGrid[left], backgroundSet)) {
+            visited[left] = 1;
+            queue[tail++] = left;
+          }
+        }
+        if (x < width - 1) {
+          const right = current + 1;
+          if (!visited[right] && !this.isBackgroundHex(hexGrid[right], backgroundSet)) {
+            visited[right] = 1;
+            queue[tail++] = right;
+          }
+        }
+        if (y > 0) {
+          const up = current - width;
+          if (!visited[up] && !this.isBackgroundHex(hexGrid[up], backgroundSet)) {
+            visited[up] = 1;
+            queue[tail++] = up;
+          }
+        }
+        if (y < height - 1) {
+          const down = current + width;
+          if (!visited[down] && !this.isBackgroundHex(hexGrid[down], backgroundSet)) {
+            visited[down] = 1;
+            queue[tail++] = down;
+          }
+        }
+      }
+
+      if (!best || count > best.count) {
+        best = { count, minX, minY, maxX, maxY };
+      }
+    }
+
+    if (!best || best.count < Math.max(8, Math.floor(total * 0.0035))) return null;
+    return {
+      minX: best.minX,
+      minY: best.minY,
+      maxX: best.maxX,
+      maxY: best.maxY,
+      width: best.maxX - best.minX + 1,
+      height: best.maxY - best.minY + 1
+    };
+  },
+  padContentBounds(bounds, width, height, padding = 0) {
+    if (!bounds) return null;
+    const pad = Math.max(0, Math.floor(padding));
+    const minX = Math.max(0, bounds.minX - pad);
+    const minY = Math.max(0, bounds.minY - pad);
+    const maxX = Math.min(width - 1, bounds.maxX + pad);
+    const maxY = Math.min(height - 1, bounds.maxY + pad);
     return {
       minX,
       minY,
@@ -909,13 +1090,15 @@ Page({
   scaleHexGridSmart(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight, backgroundHex = "#FFFFFF") {
     const output = new Array(targetWidth * targetHeight);
     const upscale = targetWidth >= sourceWidth && targetHeight >= sourceHeight;
+    const safeBackgroundHex = String(backgroundHex || "#FFFFFF").toUpperCase();
+    const isBackground = (hex) => String(hex || safeBackgroundHex).toUpperCase() === safeBackgroundHex;
     const rgbByHex = Object.create(null);
     for (let i = 0; i < EDITOR_PALETTE.length; i += 1) {
       const item = EDITOR_PALETTE[i];
       if (!item || !item.hex) continue;
       rgbByHex[item.hex.toUpperCase()] = item.rgb || parseHexRgb(item.hex);
     }
-    rgbByHex[String(backgroundHex || "#FFFFFF").toUpperCase()] = parseHexRgb(backgroundHex || "#FFFFFF");
+    rgbByHex[safeBackgroundHex] = parseHexRgb(safeBackgroundHex);
 
     if (upscale) {
       return this.scaleHexGridNearest(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight);
@@ -947,8 +1130,8 @@ Page({
             const overlapY = Math.max(0, Math.min(sy + 1, sy1) - Math.max(sy, sy0));
             const weight = overlapX * overlapY;
             if (weight <= 0) continue;
-            const hex = String(sourceGrid[sy * sourceWidth + sx] || backgroundHex).toUpperCase();
-            if (this.isBackgroundHex(hex)) {
+            const hex = String(sourceGrid[sy * sourceWidth + sx] || safeBackgroundHex).toUpperCase();
+            if (isBackground(hex)) {
               bgWeight += weight;
               continue;
             }
@@ -963,8 +1146,21 @@ Page({
 
         const totalWeight = fgWeight + bgWeight;
         const fgCoverage = totalWeight > 0 ? (fgWeight / totalWeight) : 0;
-        if (fgWeight <= 0 || fgCoverage < 0.18) {
-          output[y * targetWidth + x] = backgroundHex;
+        const centerSrcX = Math.min(sourceWidth - 1, Math.max(0, Math.floor((sx0 + sx1) / 2)));
+        const centerSrcY = Math.min(sourceHeight - 1, Math.max(0, Math.floor((sy0 + sy1) / 2)));
+        const centerHex = String(sourceGrid[centerSrcY * sourceWidth + centerSrcX] || safeBackgroundHex).toUpperCase();
+        const centerSupport = colorWeights[centerHex] || 0;
+        if (fgWeight <= 0) {
+          output[y * targetWidth + x] = safeBackgroundHex;
+          continue;
+        }
+        // Lower threshold to preserve tiny detached details (stars, short lines, etc.).
+        if (fgCoverage < 0.07) {
+          if (!isBackground(centerHex) && centerSupport > 0) {
+            output[y * targetWidth + x] = centerHex;
+          } else {
+            output[y * targetWidth + x] = safeBackgroundHex;
+          }
           continue;
         }
 
@@ -973,15 +1169,11 @@ Page({
           g: sumG / fgWeight,
           b: sumB / fgWeight
         };
-        const centerSrcX = Math.min(sourceWidth - 1, Math.max(0, Math.floor((sx0 + sx1) / 2)));
-        const centerSrcY = Math.min(sourceHeight - 1, Math.max(0, Math.floor((sy0 + sy1) / 2)));
-        const centerHex = String(sourceGrid[centerSrcY * sourceWidth + centerSrcX] || backgroundHex).toUpperCase();
-        const centerSupport = colorWeights[centerHex] || 0;
-        if (!this.isBackgroundHex(centerHex) && centerSupport > 0 && fgCoverage < 0.45) {
+        if (!isBackground(centerHex) && centerSupport > 0 && fgCoverage < 0.45) {
           output[y * targetWidth + x] = centerHex;
           continue;
         }
-        if (!this.isBackgroundHex(centerHex)) {
+        if (!isBackground(centerHex)) {
           const centerRgb = rgbByHex[centerHex] || parseHexRgb(centerHex);
           target = {
             r: target.r * 0.72 + centerRgb.r * 0.28,
@@ -990,7 +1182,7 @@ Page({
           };
         }
 
-        let bestHex = backgroundHex;
+        let bestHex = safeBackgroundHex;
         let bestScore = Number.POSITIVE_INFINITY;
         Object.keys(colorWeights).forEach((hex) => {
           const rgb = rgbByHex[hex] || parseHexRgb(hex);
@@ -1009,8 +1201,9 @@ Page({
 
     return output;
   },
-  buildSquareHexGrid(rectGrid, rectWidth, rectHeight, squareSize) {
-    const output = new Array(squareSize * squareSize).fill("#FFFFFF");
+  buildSquareHexGrid(rectGrid, rectWidth, rectHeight, squareSize, backgroundHex = "#FFFFFF") {
+    const safeBackgroundHex = String(backgroundHex || "#FFFFFF").toUpperCase();
+    const output = new Array(squareSize * squareSize).fill(safeBackgroundHex);
     const offsetX = Math.floor((squareSize - rectWidth) / 2);
     const offsetY = Math.floor((squareSize - rectHeight) / 2);
     for (let y = 0; y < rectHeight; y += 1) {
@@ -1060,8 +1253,8 @@ Page({
           const pos = i * cellSize;
           const major = i % 5 === 0;
           ctx.beginPath();
-          ctx.setLineWidth(major ? 1.4 : 0.7);
-          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.48)" : "rgba(15, 23, 42, 0.2)");
+          ctx.setLineWidth(major ? 1.6 : 0.9);
+          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.58)" : "rgba(15, 23, 42, 0.28)");
           ctx.moveTo(pos, 0);
           ctx.lineTo(pos, canvasHeight);
           ctx.stroke();
@@ -1071,8 +1264,8 @@ Page({
           const pos = i * cellSize;
           const major = i % 5 === 0;
           ctx.beginPath();
-          ctx.setLineWidth(major ? 1.4 : 0.7);
-          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.48)" : "rgba(15, 23, 42, 0.2)");
+          ctx.setLineWidth(major ? 1.6 : 0.9);
+          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.58)" : "rgba(15, 23, 42, 0.28)");
           ctx.moveTo(0, pos);
           ctx.lineTo(canvasWidth, pos);
           ctx.stroke();
@@ -1085,11 +1278,53 @@ Page({
   async generatePatternFromUpload(imagePath) {
     const imageInfo = await this.getImageInfo(imagePath);
     const maxEdge = this.resolveMaxEdgeFromSelection();
+    const preferWholeImportLayout = true;
 
     const processingEdge = clamp(maxEdge * 2, maxEdge, 400);
-    const sampled = await this.sampleImageToGrid(imagePath, imageInfo, processingEdge, processingEdge);
-    const quantized = quantizeToPalette(sampled.data);
-    const initialBounds = this.computeContentBoundsFromHexGrid(quantized.hexGrid, processingEdge, processingEdge);
+    const sampledResult = await this.sampleImageToGrid(imagePath, imageInfo, processingEdge, processingEdge);
+    const sampledImageData = sampledResult && sampledResult.imageData ? sampledResult.imageData : sampledResult;
+    const quantized = quantizeToPalette(sampledImageData.data);
+    const backgroundProfile = this.buildBackgroundHexProfileFromHexGrid(
+      quantized.hexGrid,
+      processingEdge,
+      processingEdge
+    );
+    const backgroundSet = backgroundProfile.set;
+    const backgroundHex = backgroundProfile.primaryHex || "#FFFFFF";
+    const boundsPadding = Math.max(1, Math.floor(processingEdge * 0.015));
+    const adaptiveBounds = this.padContentBounds(
+      this.computePrimaryContentBoundsFromHexGrid(
+        quantized.hexGrid,
+        processingEdge,
+        processingEdge,
+        backgroundSet
+      ) || this.computeContentBoundsFromHexGrid(
+        quantized.hexGrid,
+        processingEdge,
+        processingEdge,
+        backgroundSet
+      ),
+      processingEdge,
+      processingEdge,
+      boundsPadding
+    );
+    const sourceRect = sampledResult && sampledResult.sourceRect
+      ? sampledResult.sourceRect
+      : {
+        drawX: 0,
+        drawY: 0,
+        drawWidth: processingEdge,
+        drawHeight: processingEdge
+      };
+    const wholeImportBounds = {
+      minX: Math.max(0, Math.floor(sourceRect.drawX || 0)),
+      minY: Math.max(0, Math.floor(sourceRect.drawY || 0)),
+      maxX: Math.min(processingEdge - 1, Math.floor((sourceRect.drawX || 0) + Math.max(1, sourceRect.drawWidth || processingEdge) - 1)),
+      maxY: Math.min(processingEdge - 1, Math.floor((sourceRect.drawY || 0) + Math.max(1, sourceRect.drawHeight || processingEdge) - 1)),
+      width: Math.max(1, Math.floor(sourceRect.drawWidth || processingEdge)),
+      height: Math.max(1, Math.floor(sourceRect.drawHeight || processingEdge))
+    };
+    const initialBounds = preferWholeImportLayout ? wholeImportBounds : adaptiveBounds;
     const trimmedGrid = initialBounds
       ? this.extractHexGridRect(quantized.hexGrid, processingEdge, initialBounds)
       : quantized.hexGrid.slice(0, processingEdge * processingEdge);
@@ -1108,15 +1343,24 @@ Page({
       trimmedHeight,
       targetWidth,
       targetHeight,
-      "#FFFFFF"
+      backgroundHex
     );
-    const squareResult = this.buildSquareHexGrid(scaledRectGrid, targetWidth, targetHeight, maxEdge);
+    const squareResult = this.buildSquareHexGrid(
+      scaledRectGrid,
+      targetWidth,
+      targetHeight,
+      maxEdge,
+      backgroundHex
+    );
     const squareHexGrid = squareResult.squareGrid;
+    const safeBackgroundIndex = Number.isFinite(PALETTE_INDEX_BY_HEX[String(backgroundHex).toUpperCase()])
+      ? PALETTE_INDEX_BY_HEX[String(backgroundHex).toUpperCase()]
+      : 0;
 
     const indexGrid = squareHexGrid.map((hex) => {
       const key = String(hex || "").toUpperCase();
       const mapped = PALETTE_INDEX_BY_HEX[key];
-      return Number.isFinite(mapped) ? mapped : 0;
+      return Number.isFinite(mapped) ? mapped : safeBackgroundIndex;
     });
     const usedColorIndexes = [...new Set(indexGrid)].sort((a, b) => a - b);
     const scaledCounts = this.buildCountMapFromHexGrid(scaledRectGrid);
@@ -1131,14 +1375,14 @@ Page({
       gridImagePath,
       estimate: {
         total: targetWidth * targetHeight,
-        colorUsed: Object.keys(scaledCounts).filter((hex) => !this.isBackgroundHex(hex)).length
+        colorUsed: Object.keys(scaledCounts).filter((hex) => String(hex || "").toUpperCase() !== String(backgroundHex).toUpperCase()).length
       },
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
         gridSize: maxEdge,
         indexGridPacked: packIndexGrid(indexGrid, EDITOR_MAX_INDEX),
         usedColorIndexes,
-        backgroundHex: DEFAULT_EDITOR_BG,
+        backgroundHex,
         userEdited: false,
         paletteVersion: "mard221",
         visibleBounds: {

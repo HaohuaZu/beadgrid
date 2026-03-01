@@ -49,16 +49,16 @@
             <view class="preview-label">AI图</view>
           </view>
           <view
-            class="preview-block preview-tone-{{item.previewTones.grid}}"
+            class="preview-block preview-block-grid preview-tone-{{item.previewTones.grid}}"
             data-work-id="{{item.id}}"
             data-view-type="grid"
             bindtap="handleOpenWorkPreview"
           >
             <image
               wx:if="{{item.previewImages.grid}}"
-              class="preview-image"
+              class="preview-image preview-image-grid"
               src="{{item.previewImages.grid}}"
-              mode="aspectFill"
+              mode="aspectFit"
             ></image>
             <block wx:if="{{!item.previewImages.grid}}">
               <view wx:if="{{item.isGenerating}}" class="preview-generating">

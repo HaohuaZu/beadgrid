@@ -18,11 +18,14 @@ const EDITOR_HINT_KEY = "bead_editor_gesture_hint_v1";
 const EXPORT_SETTINGS_KEY = "bead_editor_export_settings_v1";
 const REMIXICON_FONT_FAMILY = "remixicon";
 const REMIXICON_FONT_URL = "https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.ttf";
-const EXPORT_PNG_STANDARD_WIDTH = 2400;
 const EXPORT_PNG_ULTRA_WIDTH = 3200;
 const EXPORT_PREVIEW_WIDTH = 960;
 const EXPORT_PREVIEW_HD_WIDTH = 1920;
 const EDITOR_STAGE_BG = "#ECEFF3";
+const EDITOR_STAGE_CHECKER_DARK = "#E6E8ED";
+const EDITOR_STAGE_CHECKER_LIGHT = "#F2F4F8";
+const EDITOR_STAGE_CHECKER_TILE = 18;
+const EDITOR_MIN_VISIBLE_RATIO = 0.3;
 let remixIconFontReady = false;
 const TOOL_LABELS = {
   paint: "画笔",
@@ -66,8 +69,8 @@ function parseGridSizeFromText(sizeText) {
   if (!matched) return 0;
   const width = Number(matched[1]) || 0;
   const height = Number(matched[2]) || 0;
-  if (!width || !height || width !== height) return 0;
-  return width;
+  if (!width || !height) return 0;
+  return Math.max(width, height);
 }
 
 function parseSizePairFromText(sizeText) {
@@ -81,10 +84,8 @@ function parseSizePairFromText(sizeText) {
 
 function getDefaultExportSettings() {
   return {
-    format: "pdf",
-    pdfMode: "a4",
-    pngMode: "ultra",
-    pdfPaperSize: "A4"
+    showGrid: true,
+    showCodes: true
   };
 }
 
@@ -192,20 +193,19 @@ Page({
     usedPalette: [],
     fullPalette: [],
     showExportPanel: false,
-    exportFormat: "pdf",
-    exportMode: "a4",
-    exportModeOptions: [],
-    exportPdfPaperSize: "A4",
-    exportPdfPaperOptions: [],
+    exportShowGrid: true,
+    exportShowCodes: true,
     exportPreviewPath: "",
-    exportPreviewTitle: "导出预览",
+    exportPreviewTitle: "导出图片预览（高清）",
     exportPreviewDesc: "",
     exportLargeHint: "",
-    exportPrimaryText: "导出图册 PDF",
+    exportPrimaryText: "导出高清图片到相册",
     exportPanelHint: "",
     exportPreviewBusy: false,
     exportBusy: false,
-    pdfExportReady: false,
+    exportProgressVisible: false,
+    exportProgressPercent: 0,
+    exportProgressText: "",
     showExportPreviewViewer: false,
     exportViewerPath: "",
     exportViewerBusy: false,
@@ -277,10 +277,15 @@ Page({
     this.resizeSourceImageCandidates = [];
     this.sourceResizeBusy = false;
     this.pendingSourceMaxEdge = null;
+    this.lastSourceVisibleBounds = null;
+    this.displayBoundsOverride = null;
     this.exportPreviewDebounce = null;
     this.exportPreviewPath = "";
     this.exportViewerCacheKey = "";
     this.exportViewerPath = "";
+    this.exportProgressTimer = null;
+    this.exportProgressSoftPercent = 0;
+    this.exportProgressCapPercent = 0;
     this.useCanvas2d = false;
     this.editorCanvasNode = null;
     this.editorCtx2d = null;
@@ -317,19 +322,18 @@ Page({
       showColorPicker: false,
       beadHighlightIndex: -1,
       beadStats: [],
-      exportFormat: this.exportSettings.format,
-      exportMode: this.exportSettings.format === "png" ? this.exportSettings.pngMode : this.exportSettings.pdfMode,
-      exportModeOptions: this.buildExportModeOptions(this.exportSettings.format),
-      exportPdfPaperSize: this.exportSettings.pdfPaperSize,
-      exportPdfPaperOptions: this.buildPdfPaperOptions(),
-      exportPreviewTitle: "导出预览",
+      exportShowGrid: this.exportSettings.showGrid !== false,
+      exportShowCodes: this.exportSettings.showCodes !== false,
+      exportPreviewTitle: "导出图片预览（高清）",
       exportPreviewDesc: "",
       exportLargeHint: "",
-      exportPrimaryText: this.exportSettings.format === "png" ? "导出图片到相册" : "导出图册 PDF",
+      exportPrimaryText: "导出高清图片到相册",
       exportPanelHint: "",
       exportPreviewBusy: false,
       exportBusy: false,
-      pdfExportReady: this.canUsePdfExport(),
+      exportProgressVisible: false,
+      exportProgressPercent: 0,
+      exportProgressText: "",
       showExportPreviewViewer: false,
       exportViewerPath: "",
       exportViewerBusy: false,
@@ -397,6 +401,10 @@ Page({
       clearTimeout(this.edgePickerLockTimer);
       this.edgePickerLockTimer = null;
     }
+    if (this.exportProgressTimer) {
+      clearInterval(this.exportProgressTimer);
+      this.exportProgressTimer = null;
+    }
     this.pageScrollTop = 0;
     this.persistEditedWork();
   },
@@ -405,16 +413,63 @@ Page({
       this.setData(payload, resolve);
     });
   },
+  normalizeVisibleBounds(rawBounds, gridSize) {
+    const size = Math.max(1, Math.floor(toNumber(gridSize, 0)));
+    if (!size || !rawBounds || typeof rawBounds !== "object") return null;
+    const minCol = clamp(Math.floor(toNumber(rawBounds.minCol, 0)), 0, size - 1);
+    const minRow = clamp(Math.floor(toNumber(rawBounds.minRow, 0)), 0, size - 1);
+    const maxCol = clamp(Math.floor(toNumber(rawBounds.maxCol, size - 1)), minCol, size - 1);
+    const maxRow = clamp(Math.floor(toNumber(rawBounds.maxRow, size - 1)), minRow, size - 1);
+    const cols = maxCol - minCol + 1;
+    const rows = maxRow - minRow + 1;
+    if (cols <= 0 || rows <= 0) return null;
+    if (cols >= size && rows >= size) return null;
+    return { minCol, minRow, maxCol, maxRow, cols, rows };
+  },
+  buildCenteredVisibleBounds(width, height, gridSize) {
+    const size = Math.max(1, Math.floor(toNumber(gridSize, 0)));
+    if (!size) return null;
+    const cols = clamp(Math.floor(toNumber(width, size)), 1, size);
+    const rows = clamp(Math.floor(toNumber(height, size)), 1, size);
+    if (cols >= size && rows >= size) return null;
+    const minCol = Math.floor((size - cols) / 2);
+    const minRow = Math.floor((size - rows) / 2);
+    const maxCol = minCol + cols - 1;
+    const maxRow = minRow + rows - 1;
+    return { minCol, minRow, maxCol, maxRow, cols, rows };
+  },
+  buildVisibleBoundsByRatio(width, height, gridSize) {
+    const safeW = Math.max(1, toNumber(width, gridSize));
+    const safeH = Math.max(1, toNumber(height, gridSize));
+    const ratio = safeW / Math.max(1, safeH);
+    let cols;
+    let rows;
+    if (ratio >= 1) {
+      cols = gridSize;
+      rows = Math.max(1, Math.round(gridSize / Math.max(1e-6, ratio)));
+    } else {
+      rows = gridSize;
+      cols = Math.max(1, Math.round(gridSize * ratio));
+    }
+    return this.buildCenteredVisibleBounds(cols, rows, gridSize);
+  },
+  getSerializableVisibleBounds() {
+    if (!this.displayBoundsOverride) return null;
+    return {
+      minCol: this.displayBoundsOverride.minCol,
+      minRow: this.displayBoundsOverride.minRow,
+      maxCol: this.displayBoundsOverride.maxCol,
+      maxRow: this.displayBoundsOverride.maxRow
+    };
+  },
   loadExportSettings() {
     try {
       const stored = wx.getStorageSync(EXPORT_SETTINGS_KEY);
       const defaults = getDefaultExportSettings();
       if (!stored || typeof stored !== "object") return defaults;
       return {
-        format: stored.format === "png" ? "png" : "pdf",
-        pdfMode: stored.pdfMode === "ultra" ? "ultra" : "a4",
-        pngMode: stored.pngMode === "standard" ? "standard" : "ultra",
-        pdfPaperSize: stored.pdfPaperSize === "A3" ? "A3" : "A4"
+        showGrid: stored.showGrid !== false,
+        showCodes: stored.showCodes !== false
       };
     } catch (error) {
       return getDefaultExportSettings();
@@ -423,90 +478,21 @@ Page({
   persistExportSettings() {
     try {
       const payload = {
-        format: this.exportSettings && this.exportSettings.format === "png" ? "png" : "pdf",
-        pdfMode: this.exportSettings && this.exportSettings.pdfMode === "ultra" ? "ultra" : "a4",
-        pngMode: this.exportSettings && this.exportSettings.pngMode === "standard" ? "standard" : "ultra",
-        pdfPaperSize: this.exportSettings && this.exportSettings.pdfPaperSize === "A3" ? "A3" : "A4"
+        showGrid: this.exportSettings ? this.exportSettings.showGrid !== false : true,
+        showCodes: this.exportSettings ? this.exportSettings.showCodes !== false : true
       };
       wx.setStorageSync(EXPORT_SETTINGS_KEY, payload);
     } catch (error) {
       // ignore storage errors
     }
   },
-  buildPdfPaperOptions() {
-    return [
-      { value: "A4", label: "A4（推荐）" },
-      { value: "A3", label: "A3（单页更大）" }
-    ];
-  },
-  buildExportModeOptions(format) {
-    if (format === "png") {
-      return [
-        { value: "standard", label: "标准高清图片" },
-        { value: "ultra", label: "超清大图" }
-      ];
-    }
-    return [
-      { value: "a4", label: "A4 分页图册" },
-      { value: "ultra", label: "超大单页图册" }
-    ];
-  },
-  getActiveExportMode(format) {
-    const safeFormat = format === "png" ? "png" : "pdf";
-    if (safeFormat === "png") {
-      return this.exportSettings && this.exportSettings.pngMode === "standard" ? "standard" : "ultra";
-    }
-    return this.exportSettings && this.exportSettings.pdfMode === "ultra" ? "ultra" : "a4";
-  },
-  getPdfExportBaseUrl() {
-    const app = getApp && getApp();
-    const raw = app && app.globalData ? app.globalData.pdfExportBaseUrl : "";
-    if (!raw || typeof raw !== "string") return "";
-    return raw.replace(/\/$/, "");
-  },
-  canUsePdfExport() {
-    return Boolean(this.getPdfExportBaseUrl());
-  },
-  computeExportDetailPlan(paperSize = "A4") {
-    const safePaper = paperSize === "A3" ? "A3" : "A4";
-    const defaultCells = safePaper === "A3" ? 28 : 20;
-    const cellsPerPage = Math.min(this.gridSize || 0, Math.max(12, defaultCells));
+  buildExportSummary(showGrid, showCodes) {
+    const gridLabel = showGrid ? "显示网格" : "隐藏网格";
+    const codeLabel = showCodes ? "显示色号" : "隐藏色号";
     return {
-      cellsPerPage,
-      pagesX: this.gridSize ? Math.ceil(this.gridSize / cellsPerPage) : 0,
-      pagesY: this.gridSize ? Math.ceil(this.gridSize / cellsPerPage) : 0
-    };
-  },
-  buildExportSummary(format, mode) {
-    if (format === "png") {
-      const title = mode === "standard" ? "导出图片预览（标准）" : "导出图片预览（超清）";
-      const desc = mode === "standard"
-        ? "适合快速保存到相册与分享。"
-        : "适合放大查看细节，保留色号、图例和颗粒统计。";
-      return {
-        title,
-        desc,
-        largeHint: this.gridSize >= 104 && mode === "standard"
-          ? "超大尺寸建议优先使用“超清大图”或“图册分页”，细节更清晰。"
-          : ""
-      };
-    }
-
-    const plan = this.computeExportDetailPlan(this.data.exportPdfPaperSize || "A4");
-    const paperLabel = (this.data.exportPdfPaperSize || "A4").toUpperCase() === "A3" ? "A3" : "A4";
-    if (mode === "ultra") {
-      return {
-        title: "导出图册预览（超大单页）",
-        desc: "适合在平板或电脑中放大查看完整图纸。",
-        largeHint: this.canUsePdfExport() ? "" : "当前小程序未配置 PDF 服务域名，先显示页面内预览。"
-      };
-    }
-    return {
-      title: `导出图册预览（${paperLabel} 分页）`,
-      desc: `会生成 1 张总览 + ${Math.max(1, plan.pagesX * plan.pagesY)} 张分页详图，每页约 ${plan.cellsPerPage}x${plan.cellsPerPage} 格。`,
-      largeHint: this.canUsePdfExport()
-        ? ""
-        : "当前小程序未配置 PDF 服务域名，先显示页面内预览。"
+      title: "导出图片预览（高清）",
+      desc: `上方为高清图纸，下方为完整颜色图例与统计。当前设置：${gridLabel}、${codeLabel}。`,
+      largeHint: ""
     };
   },
   maybeShowEditorHint() {
@@ -683,6 +669,7 @@ Page({
           index: idx,
           code: color.code,
           hex: color.hex,
+          textColor: this.getTextColorByHex(color.hex),
           count: counter[key],
           order: Number.isFinite(color.order) ? color.order : 9999
         };
@@ -735,7 +722,10 @@ Page({
   },
   getTextColorByIndex(index) {
     const color = this.getPaletteColor(index);
-    const hex = String((color && color.hex) || "#FFFFFF").replace("#", "");
+    return this.getTextColorByHex(color && color.hex);
+  },
+  getTextColorByHex(hexValue) {
+    const hex = String(hexValue || "#FFFFFF").replace("#", "");
     if (hex.length !== 6) return "#1F2430";
     const r = parseInt(hex.slice(0, 2), 16);
     const g = parseInt(hex.slice(2, 4), 16);
@@ -1029,8 +1019,20 @@ Page({
       const mapped = this.paletteIndexByHex[key];
       return Number.isFinite(mapped) ? mapped : 0;
     });
-    const bgIndex = this.getDominantBorderIndex(sourceGrid, processingEdge);
-    const ratio = sourceWidth / Math.max(1, sourceHeight);
+    const sourceMaster = this.buildResizeSourceFromGrid(sourceGrid, processingEdge);
+    const sourceRectGrid = sourceMaster && Array.isArray(sourceMaster.rectGrid) && sourceMaster.rectGrid.length
+      ? sourceMaster.rectGrid
+      : sourceGrid;
+    const sourceRectW = sourceMaster && Number(sourceMaster.width) > 0
+      ? Number(sourceMaster.width)
+      : processingEdge;
+    const sourceRectH = sourceMaster && Number(sourceMaster.height) > 0
+      ? Number(sourceMaster.height)
+      : processingEdge;
+    const bgIndex = sourceMaster && Number.isFinite(sourceMaster.bgIndex)
+      ? sourceMaster.bgIndex
+      : this.getDominantBorderIndex(sourceGrid, processingEdge);
+    const ratio = sourceRectW / Math.max(1, sourceRectH);
     let targetW;
     let targetH;
     if (ratio >= 1) {
@@ -1042,12 +1044,16 @@ Page({
     }
     targetW = Math.min(targetW, nextGridSize);
     targetH = Math.min(targetH, nextGridSize);
+    this.lastSourceVisibleBounds = {
+      gridSize: nextGridSize,
+      width: targetW,
+      height: targetH
+    };
 
-    // Do not auto-cut background: keep the whole source canvas and only resize.
     const rectScaled = this.resampleIndexGridSmart(
-      sourceGrid,
-      processingEdge,
-      processingEdge,
+      sourceRectGrid,
+      sourceRectW,
+      sourceRectH,
       targetW,
       targetH,
       bgIndex
@@ -1064,6 +1070,7 @@ Page({
     return output;
   },
   async buildGridFromBestSource(targetMaxEdge) {
+    this.lastSourceVisibleBounds = null;
     const candidates = [];
     if (typeof this.resizeSourceImagePath === "string" && this.resizeSourceImagePath.length) {
       candidates.push(this.resizeSourceImagePath);
@@ -1079,6 +1086,7 @@ Page({
     for (let i = 0; i < candidates.length; i += 1) {
       const path = candidates[i];
       try {
+        this.lastSourceVisibleBounds = null;
         const grid = await this.buildGridFromSourceImage(path, targetMaxEdge);
         if (Array.isArray(grid) && grid.length) {
           this.resizeSourceImagePath = path;
@@ -1099,6 +1107,14 @@ Page({
     const targetIndex = workLibrary.findIndex((item) => item && item.id === workId);
     if (targetIndex === -1) return;
     const source = originalWork || workLibrary[targetIndex] || {};
+    const sizePair = parseSizePairFromText(source && source.size);
+    const fallbackBounds = sizePair
+      ? this.buildCenteredVisibleBounds(sizePair.width, sizePair.height, gridSize)
+      : null;
+    const sourceBounds = this.normalizeVisibleBounds(
+      source && source.editorData && source.editorData.visibleBounds,
+      gridSize
+    ) || fallbackBounds;
     const usedColorIndexes = [...new Set(indexGrid.filter((idx) => Number.isFinite(idx) && idx >= 0))].sort((a, b) => a - b);
     workLibrary[targetIndex] = {
       ...source,
@@ -1109,7 +1125,13 @@ Page({
         usedColorIndexes,
         backgroundHex: "#FFFFFF",
         userEdited: false,
-        paletteVersion: EDITOR_PALETTE_VERSION
+        paletteVersion: EDITOR_PALETTE_VERSION,
+        visibleBounds: sourceBounds ? {
+          minCol: sourceBounds.minCol,
+          minRow: sourceBounds.minRow,
+          maxCol: sourceBounds.maxCol,
+          maxRow: sourceBounds.maxRow
+        } : undefined
       }
     };
     this.writeWorkLibrary(workLibrary);
@@ -1253,6 +1275,15 @@ Page({
 
     this.gridSize = gridSize;
     this.gridIndexes = this.recenterLegacyGrid(indexGridRaw.slice(0, total), gridSize);
+    const savedVisibleBounds = this.normalizeVisibleBounds(
+      editorData && editorData.visibleBounds,
+      gridSize
+    );
+    const sizePair = parseSizePairFromText(work && work.size);
+    const fallbackVisibleBounds = sizePair
+      ? this.buildCenteredVisibleBounds(sizePair.width, sizePair.height, gridSize)
+      : null;
+    this.displayBoundsOverride = savedVisibleBounds || fallbackVisibleBounds;
     this.backgroundIndexSet = this.computeBackgroundIndexSet();
     this.rebuildResizeMasterFromCurrent();
     this.hasManualEdits = false;
@@ -1284,7 +1315,7 @@ Page({
       maxEdgeError: ""
     });
 
-    this.centerByGridCenter(1);
+    this.centerContent();
 
     if (this.canvasReady) {
       this.requestRedraw(false);
@@ -1320,7 +1351,7 @@ Page({
         () => {
           this.initEditorCanvas2d(canvasWidth, canvasHeight).finally(() => {
             this.canvasReady = true;
-            if (this.data.hasEditableGrid) this.centerByGridCenter(1);
+            if (this.data.hasEditableGrid) this.centerContent();
             this.requestRedraw(false);
           });
         }
@@ -1525,7 +1556,7 @@ Page({
     const baseCell = this.getBaseCell();
     const canvasEdge = Math.min(this.data.canvasWidth, this.data.canvasHeight);
     const maxScale = Math.max(1, canvasEdge / (baseCell * 3));
-    return { minScale: 0.8, maxScale };
+    return { minScale: 0.12, maxScale };
   },
   clampOffset() {
     const { canvasWidth, canvasHeight } = this.data;
@@ -1534,14 +1565,17 @@ Page({
     const drawCell = Math.max(1, baseCell * this.scale);
     const boardWidth = drawCell * bounds.cols;
     const boardHeight = drawCell * bounds.rows;
-    const keepX = Math.min(boardWidth * 0.7, canvasWidth * 0.7);
-    const keepY = Math.min(boardHeight * 0.7, canvasHeight * 0.7);
-    const maxOX = (canvasWidth + boardWidth) / 2 - keepX;
-    const maxOY = (canvasHeight + boardHeight) / 2 - keepY;
+    // Allow up to ~70% outside stage: keep at least 30% of board visible.
+    const minVisibleWidth = Math.max(1, Math.min(boardWidth, canvasWidth, boardWidth * EDITOR_MIN_VISIBLE_RATIO));
+    const minVisibleHeight = Math.max(1, Math.min(boardHeight, canvasHeight, boardHeight * EDITOR_MIN_VISIBLE_RATIO));
+    const maxOX = Math.max(0, (canvasWidth + boardWidth) / 2 - minVisibleWidth);
+    const maxOY = Math.max(0, (canvasHeight + boardHeight) / 2 - minVisibleHeight);
     this.offsetX = clamp(this.offsetX, -maxOX, maxOX);
     this.offsetY = clamp(this.offsetY, -maxOY, maxOY);
   },
   getDisplayBounds() {
+    const override = this.normalizeVisibleBounds(this.displayBoundsOverride, this.gridSize);
+    if (override) return override;
     const size = this.gridSize || 0;
     if (!size) {
       return {
@@ -1686,7 +1720,9 @@ Page({
   getPatternSizeText() {
     const size = Number(this.gridSize) || 0;
     if (!size) return "--";
-    return `${size}×${size}`;
+    const bounds = this.getDisplayBounds();
+    const pair = this.getPatternSizeFromBounds(bounds);
+    return `${pair.width}×${pair.height}`;
   },
   openCustomEdgeInputModal() {
     const pair = parseSizePairFromText(this.data.gridSizeText || "");
@@ -1975,22 +2011,20 @@ Page({
       if (resizeBgSet[String(idx)]) return true;
       return false;
     };
-    const region = this.computePrimaryContentRegion(indexGrid, size, isResizeBackground);
-    const bounds = region && region.bounds
-      ? region.bounds
-      : this.computeGridContentBoundsWithChecker(indexGrid, size, isResizeBackground);
+    // Keep all non-background pixels in source bounds.
+    // Do not restrict to largest connected region, otherwise detached details
+    // (e.g. star, motion lines, horn marks) are lost when resizing.
+    const bounds = this.computeGridContentBoundsWithChecker(indexGrid, size, isResizeBackground);
     if (!bounds) return null;
 
     const width = bounds.maxCol - bounds.minCol + 1;
     const height = bounds.maxRow - bounds.minRow + 1;
     const bgIndex = this.getBackgroundFillIndex();
     const rectGrid = new Array(width * height).fill(bgIndex);
-    const regionMask = region && region.mask ? region.mask : null;
     for (let row = 0; row < height; row += 1) {
       for (let col = 0; col < width; col += 1) {
         const srcIndex = (bounds.minRow + row) * size + (bounds.minCol + col);
         const color = indexGrid[srcIndex];
-        if (regionMask && !regionMask[srcIndex]) continue;
         if (isResizeBackground(color)) continue;
         rectGrid[row * width + col] = color;
       }
@@ -2051,6 +2085,9 @@ Page({
 
     const gridSize = this.gridSize;
     if (!gridSize || !Array.isArray(this.gridIndexes)) return;
+    const previousBounds = this.getDisplayBounds();
+    const previousDisplayWidth = previousBounds.cols;
+    const previousDisplayHeight = previousBounds.rows;
     const nextGridSize = clamp(parsedEdge, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
     if (nextGridSize === this.gridSize) {
       this.setData({
@@ -2102,6 +2139,24 @@ Page({
 
     this.gridSize = nextGridSize;
     this.gridIndexes = newGrid;
+    if (
+      fromSource
+      && hasProvidedGrid
+      && this.lastSourceVisibleBounds
+      && this.lastSourceVisibleBounds.gridSize === nextGridSize
+    ) {
+      this.displayBoundsOverride = this.buildCenteredVisibleBounds(
+        this.lastSourceVisibleBounds.width,
+        this.lastSourceVisibleBounds.height,
+        nextGridSize
+      );
+    } else if (this.displayBoundsOverride || previousDisplayWidth !== gridSize || previousDisplayHeight !== gridSize) {
+      this.displayBoundsOverride = this.buildVisibleBoundsByRatio(
+        previousDisplayWidth,
+        previousDisplayHeight,
+        nextGridSize
+      );
+    }
     this.hasManualEdits = !fromSource;
     this.backgroundIndexSet = this.computeBackgroundIndexSet();
     this.refreshBeadMetrics();
@@ -2481,7 +2536,7 @@ Page({
   },
   getAutoFitScale(bounds) {
     if (!this.gridSize) return 1;
-    const safeBounds = bounds || this.computePrimaryContentBounds() || this.computeContentBounds();
+    const safeBounds = bounds || this.getDisplayBounds();
     const widthCells = safeBounds ? (safeBounds.maxCol - safeBounds.minCol + 1) : this.gridSize;
     const heightCells = safeBounds ? (safeBounds.maxRow - safeBounds.minRow + 1) : this.gridSize;
     const contentCells = Math.max(widthCells, heightCells, 1);
@@ -2494,19 +2549,42 @@ Page({
     return clamp(scale, minScale, maxScale);
   },
   centerContent(scale = null) {
-    const bounds = this.computePrimaryContentBounds() || this.computeContentBounds();
+    const bounds = this.getDisplayBounds();
     const resolvedScale = Number.isFinite(scale) ? scale : this.getAutoFitScale(bounds);
     const { minScale, maxScale } = this.getScaleLimits();
     const safeScale = clamp(resolvedScale, minScale, maxScale);
-    const drawCell = Math.max(1, this.getBaseCell() * safeScale);
-    const contentCenterCol = bounds ? (bounds.minCol + bounds.maxCol + 1) / 2 : this.gridSize / 2;
-    const contentCenterRow = bounds ? (bounds.minRow + bounds.maxRow + 1) / 2 : this.gridSize / 2;
-    const boardCenter = this.gridSize / 2;
-
     this.scale = safeScale;
-    this.offsetX = (boardCenter - contentCenterCol) * drawCell;
-    this.offsetY = (boardCenter - contentCenterRow) * drawCell;
+    this.offsetX = 0;
+    this.offsetY = 0;
     this.updateScaleText();
+  },
+  drawStageCheckerBackground(ctx, canvasWidth, canvasHeight) {
+    const tile = Math.max(10, EDITOR_STAGE_CHECKER_TILE);
+    ctx.setFillStyle(EDITOR_STAGE_CHECKER_LIGHT);
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.setFillStyle(EDITOR_STAGE_CHECKER_DARK);
+    for (let y = 0; y < canvasHeight; y += tile) {
+      const rowOffset = (Math.floor(y / tile) % 2) ? tile : 0;
+      for (let x = rowOffset; x < canvasWidth; x += tile * 2) {
+        ctx.fillRect(x, y, tile, tile);
+      }
+    }
+  },
+  drawBoardBorder(ctx, originX, originY, boardWidth, boardHeight) {
+    if (boardWidth <= 1 || boardHeight <= 1) return;
+    const left = originX + 0.5;
+    const top = originY + 0.5;
+    const right = originX + boardWidth - 0.5;
+    const bottom = originY + boardHeight - 0.5;
+    ctx.beginPath();
+    ctx.moveTo(left, top);
+    ctx.lineTo(right, top);
+    ctx.lineTo(right, bottom);
+    ctx.lineTo(left, bottom);
+    ctx.lineTo(left, top);
+    ctx.setLineWidth(1.2);
+    ctx.setStrokeStyle("rgba(31, 36, 48, 0.38)");
+    ctx.stroke();
   },
   redrawCanvas(lightMode = false) {
     if (!this.canvasReady) return;
@@ -2530,8 +2608,7 @@ Page({
     );
     const highlightIndex = this.data.beadHighlightIndex;
 
-    ctx.setFillStyle(EDITOR_STAGE_BG);
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    this.drawStageCheckerBackground(ctx, canvasWidth, canvasHeight);
 
     if (this.data.hasEditableGrid && this.gridSize > 0 && this.gridIndexes.length) {
       const displayCols = bounds.cols;
@@ -2588,6 +2665,8 @@ Page({
           }
         }
       }
+
+      this.drawBoardBorder(ctx, originX, originY, boardWidth, boardHeight);
 
       if (this.data.showGridLines && drawCell >= 4 && !dragLikeMode) {
         ctx.beginPath();
@@ -2953,6 +3032,8 @@ Page({
 
     const usedColorIndexes = this.computeUsedColorIndexes();
     const work = workLibrary[targetIndex] || {};
+    const patternSizeText = this.getPatternSizeText().replace("×", "x");
+    const visibleBounds = this.getSerializableVisibleBounds();
     const nextPreviewImages = {
       ...(work.previewImages || {})
     };
@@ -2962,7 +3043,7 @@ Page({
 
     const next = {
       ...work,
-      size: `${this.gridSize}x${this.gridSize}`,
+      size: patternSizeText || `${this.gridSize}x${this.gridSize}`,
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
         gridSize: this.gridSize,
@@ -2970,7 +3051,8 @@ Page({
         usedColorIndexes,
         backgroundHex: "#FFFFFF",
         userEdited: Boolean((work.editorData && work.editorData.userEdited) || this.hasManualEdits),
-        paletteVersion: EDITOR_PALETTE_VERSION
+        paletteVersion: EDITOR_PALETTE_VERSION,
+        visibleBounds: visibleBounds || undefined
       },
       beadEstimate: {
         total: this.gridSize * this.gridSize,
@@ -3864,7 +3946,7 @@ Page({
   },
   handleResetView() {
     this.closeEraserMenu();
-    this.centerByGridCenter(1);
+    this.centerContent();
     this.requestRedraw(false);
   },
   handleUndo() {
@@ -3927,6 +4009,84 @@ Page({
     }
     return this.getPaletteColor(this.gridIndexes[index]).code;
   },
+  estimateCanvasTextWidth(text, fontSize = 16) {
+    const raw = String(text || "");
+    const size = Math.max(10, Number(fontSize) || 10);
+    let width = 0;
+    for (let i = 0; i < raw.length; i += 1) {
+      const ch = raw[i];
+      const code = raw.charCodeAt(i);
+      const isCjk = (code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf);
+      if (isCjk) {
+        width += size;
+        continue;
+      }
+      if (code <= 0x7f) {
+        const isWideAscii = /[A-Z0-9]/.test(ch);
+        width += size * (isWideAscii ? 0.62 : 0.54);
+        continue;
+      }
+      width += size * 0.78;
+    }
+    return Math.ceil(width);
+  },
+  computeLegendChipLayout(legend, maxWidth, options = {}) {
+    const list = Array.isArray(legend) ? legend : [];
+    const usableWidth = Math.max(120, Math.floor(maxWidth));
+    const swatchSize = Math.max(12, Math.floor(toNumber(options.swatchSize, 18)));
+    const chipHeight = Math.max(34, Math.floor(toNumber(options.chipHeight, 48)));
+    const chipPadX = Math.max(8, Math.floor(toNumber(options.chipPadX, 10)));
+    const textGap = Math.max(8, Math.floor(toNumber(options.textGap, 10)));
+    const codeSize = Math.max(12, Math.floor(toNumber(options.codeSize, 16)));
+    const metaSize = Math.max(10, Math.floor(toNumber(options.metaSize, 13)));
+    const colGap = Math.max(6, Math.floor(toNumber(options.colGap, 10)));
+    const rowGap = Math.max(6, Math.floor(toNumber(options.rowGap, 10)));
+    const minChipWidth = Math.max(60, Math.floor(toNumber(options.minChipWidth, 88)));
+    const maxChipWidth = Math.max(minChipWidth, Math.floor(toNumber(options.maxChipWidth, 116)));
+    const preferredColumns = Math.max(1, Math.floor(toNumber(options.preferredColumns, 8)));
+
+    const maxColumnsByWidth = Math.max(1, Math.floor((usableWidth + colGap) / (minChipWidth + colGap)));
+    const minColumnsByMaxWidth = Math.max(1, Math.ceil((usableWidth + colGap) / (maxChipWidth + colGap)));
+    const targetColumns = Math.max(minColumnsByMaxWidth, preferredColumns);
+    const columns = Math.min(
+      Math.max(1, list.length || 1),
+      Math.max(1, Math.min(maxColumnsByWidth, targetColumns))
+    );
+    const chipWidth = Math.max(
+      minChipWidth,
+      Math.floor((usableWidth - colGap * (columns - 1)) / columns)
+    );
+
+    const chips = [];
+    for (let i = 0; i < list.length; i += 1) {
+      const item = list[i] || {};
+      const codeText = String(item.code || "");
+      const metaText = `× ${Number(item.count) || 0}`;
+      const chipHex = item.hex || "#000000";
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+
+      chips.push({
+        x: col * (chipWidth + colGap),
+        y: row * (chipHeight + rowGap),
+        width: chipWidth,
+        height: chipHeight,
+        swatchSize,
+        chipPadX,
+        textGap,
+        codeSize,
+        metaSize,
+        codeText,
+        metaText,
+        hex: chipHex,
+        textColor: this.getTextColorByHex(chipHex)
+      });
+    }
+
+    const rows = chips.length ? Math.ceil(chips.length / columns) : 0;
+    const contentHeight = rows ? (rows * chipHeight + (rows - 1) * rowGap) : 0;
+    return { chips, contentHeight };
+  },
   computePosterLayout(baseWidth, legendCount) {
     const width = Math.max(1400, Math.floor(baseWidth));
     const padding = Math.floor(width * 0.035);
@@ -3958,12 +4118,83 @@ Page({
       }
     };
   },
+  computePngPosterLayout(baseWidth, legend, mode = "ultra") {
+    const width = Math.max(960, Math.floor(baseWidth));
+    const pagePadding = Math.max(22, Math.floor(width * 0.032));
+    const contentWidth = Math.max(320, width - pagePadding * 2);
+    const gridGap = Math.max(18, Math.floor(width * 0.016));
+    const list = Array.isArray(legend) ? legend : [];
+    const panelPaddingX = Math.max(16, Math.floor(width * 0.011));
+    const panelPaddingY = Math.max(14, Math.floor(width * 0.010));
+    const titleSize = clamp(Math.floor(width * 0.020), 22, 52);
+    const summarySize = clamp(Math.floor(width * 0.0125), 13, 28);
+    const titleGap = Math.max(10, Math.floor(width * 0.007));
+    const chipsTopGap = Math.max(16, Math.floor(width * 0.011));
+    const gridSize = Math.max(320, Math.floor(contentWidth));
+    const chipConfig = {
+      swatchSize: clamp(Math.floor(width * 0.012), 14, 30),
+      chipHeight: clamp(Math.floor(width * (mode === "standard" ? 0.024 : 0.021)), 36, 56),
+      chipPadX: clamp(Math.floor(width * 0.006), 8, 16),
+      textGap: clamp(Math.floor(width * 0.005), 8, 14),
+      codeSize: clamp(Math.floor(width * 0.0105), 13, 24),
+      metaSize: clamp(Math.floor(width * 0.0084), 11, 20),
+      colGap: clamp(Math.floor(width * 0.0055), 8, 14),
+      rowGap: clamp(Math.floor(width * 0.0055), 8, 14),
+      minChipWidth: clamp(Math.floor(width * 0.048), 56, 110),
+      maxChipWidth: clamp(Math.floor(width * 0.072), 92, 128),
+      preferredColumns: mode === "standard" ? 8 : 10
+    };
+    const chipLayout = this.computeLegendChipLayout(
+      list,
+      Math.max(120, gridSize - panelPaddingX * 2),
+      chipConfig
+    );
+    const legendPanelHeight = panelPaddingY
+      + titleSize
+      + titleGap
+      + summarySize
+      + chipsTopGap
+      + chipLayout.contentHeight
+      + panelPaddingY;
+
+    const targetHeight43 = Math.floor(width * 0.75);
+    const requiredHeight = pagePadding * 2 + gridSize + gridGap + legendPanelHeight;
+    const height = Math.max(targetHeight43, requiredHeight);
+    const gridX = pagePadding;
+    const gridY = pagePadding;
+    const legendY = gridY + gridSize + gridGap;
+
+    return {
+      width,
+      height,
+      background: "#F6EEDF",
+      grid: {
+        x: gridX,
+        y: gridY,
+        size: gridSize
+      },
+      legend: {
+        x: gridX,
+        y: legendY,
+        width: gridSize,
+        height: legendPanelHeight,
+        panelPaddingX,
+        panelPaddingY,
+        titleSize,
+        summarySize,
+        titleGap,
+        chipsTopGap,
+        chips: chipLayout.chips
+      }
+    };
+  },
   drawExportGrid(ctx, options) {
     const {
       x,
       y,
       size,
       showCodes,
+      showCodeOutline = true,
       showAxisLabels,
       axisStep = 1,
       withGrid = true,
@@ -4004,10 +4235,13 @@ Page({
       }
     }
 
-    ctx.setFillStyle("rgba(255,255,255,0.18)");
+    const tintAlpha = showCodes ? 0.08 : 0.18;
+    ctx.setFillStyle(`rgba(255,255,255,${tintAlpha})`);
     ctx.fillRect(startX, startY, boardSize, boardSize);
 
     if (showCodes) {
+      const labelCache = Array.isArray(this.beadCellLabels) ? this.beadCellLabels : null;
+      const textColorCache = Object.create(null);
       ctx.setTextAlign("center");
       ctx.setTextBaseline("middle");
       for (let row = 0; row < this.gridSize; row += 1) {
@@ -4015,15 +4249,35 @@ Page({
           const index = row * this.gridSize + col;
           const colorIndex = this.gridIndexes[index];
           if (this.isBackgroundCell(colorIndex)) continue;
-          const label = this.getCellExportLabel(index);
+          const label = labelCache && labelCache[index]
+            ? labelCache[index]
+            : this.getPaletteColor(colorIndex).code;
           if (!label) continue;
-          const textSize = clamp(Math.floor(cellSize * (String(label).length >= 3 ? 0.34 : 0.44)), 8, 26);
+          const textSize = clamp(Math.floor(cellSize * (String(label).length >= 3 ? 0.5 : 0.62)), 10, 34);
+          const centerX = Math.round(startX + col * cellSize + cellSize / 2);
+          const centerY = Math.round(startY + row * cellSize + cellSize / 2);
+          let mainColor = textColorCache[colorIndex];
+          if (!mainColor) {
+            mainColor = this.getTextColorByIndex(colorIndex);
+            textColorCache[colorIndex] = mainColor;
+          }
+          const outlineColor = mainColor === "#FFFFFF" ? "rgba(0,0,0,0.46)" : "rgba(255,255,255,0.55)";
+          const offset = 1;
+          const shouldDrawOutline = Boolean(showCodeOutline && cellSize <= 15);
+
           ctx.setFontSize(textSize);
-          ctx.setFillStyle(this.getTextColorByIndex(colorIndex));
+          if (shouldDrawOutline) {
+            ctx.setFillStyle(outlineColor);
+            ctx.fillText(String(label), centerX - offset, centerY);
+            ctx.fillText(String(label), centerX + offset, centerY);
+            ctx.fillText(String(label), centerX, centerY - offset);
+            ctx.fillText(String(label), centerX, centerY + offset);
+          }
+          ctx.setFillStyle(mainColor);
           ctx.fillText(
             String(label),
-            startX + col * cellSize + cellSize / 2,
-            startY + row * cellSize + cellSize / 2
+            centerX,
+            centerY
           );
         }
       }
@@ -4103,47 +4357,115 @@ Page({
     this.drawRoundedRectPath(ctx, layout.x, layout.y, layout.width, layout.height, 28);
     ctx.fill();
 
-    ctx.setFontSize(34);
-    ctx.setFillStyle("#2A1D12");
-    ctx.fillText("颜色图例 / 颗粒统计", layout.x + 26, layout.y + 48);
+    const totalCount = legend.reduce((sum, item) => sum + (Number(item && item.count) || 0), 0);
+    const summaryText = `共 ${legend.length} 种颜色 · 总计 ${totalCount}`;
 
-    const cardTop = layout.y + 82;
-    const swatchSize = Math.max(22, Math.floor(layout.cardWidth * 0.16));
-    legend.forEach((item, index) => {
-      const col = index % layout.columns;
-      const row = Math.floor(index / layout.columns);
-      const cardX = layout.x + col * (layout.cardWidth + layout.cardGap);
-      const cardY = cardTop + row * (layout.cardHeight + layout.cardGap);
-      if (cardY + layout.cardHeight > layout.y + layout.height - 10) return;
+    ctx.setTextAlign("left");
+    ctx.setTextBaseline("top");
+    ctx.setFontSize(layout.titleSize || 34);
+    ctx.setFillStyle("#2A1D12");
+    ctx.fillText(
+      "颜色图例 / 颗粒统计",
+      layout.x + (layout.panelPaddingX || 26),
+      layout.y + (layout.panelPaddingY || 20)
+    );
+
+    ctx.setFillStyle("#67584A");
+    ctx.setFontSize(layout.summarySize || 20);
+    ctx.fillText(
+      summaryText,
+      layout.x + (layout.panelPaddingX || 26),
+      layout.y + (layout.panelPaddingY || 20) + (layout.titleSize || 34) + (layout.titleGap || 12)
+    );
+
+    const chipsTop = layout.y
+      + (layout.panelPaddingY || 20)
+      + (layout.titleSize || 34)
+      + (layout.titleGap || 12)
+      + (layout.summarySize || 20)
+      + (layout.chipsTopGap || 18);
+    const chips = Array.isArray(layout.chips) ? layout.chips : [];
+    chips.forEach((chip) => {
+      const cardX = layout.x + (layout.panelPaddingX || 0) + chip.x;
+      const cardY = chipsTop + chip.y;
 
       ctx.setFillStyle("#FFFFFF");
-      this.drawRoundedRectPath(ctx, cardX, cardY, layout.cardWidth, layout.cardHeight, 20);
+      this.drawRoundedRectPath(
+        ctx,
+        cardX,
+        cardY,
+        chip.width,
+        chip.height,
+        Math.max(10, Math.floor(chip.height * 0.28))
+      );
       ctx.fill();
       ctx.setStrokeStyle("#E4D6BE");
-      ctx.setLineWidth(2);
+      ctx.setLineWidth(1.4);
       ctx.stroke();
 
-      ctx.setFillStyle(item.hex || "#000000");
-      ctx.fillRect(cardX + 18, cardY + 20, swatchSize, swatchSize);
-      ctx.setStrokeStyle("rgba(15,23,42,0.08)");
+      const swatchPadX = Math.max(6, Math.floor(chip.width * 0.07));
+      const swatchTop = cardY + Math.max(4, Math.floor(chip.height * 0.08));
+      const swatchW = Math.max(12, chip.width - swatchPadX * 2);
+      const swatchH = Math.max(16, Math.floor(chip.height * 0.56));
+      ctx.setFillStyle(chip.hex || "#000000");
+      this.drawRoundedRectPath(
+        ctx,
+        cardX + swatchPadX,
+        swatchTop,
+        swatchW,
+        swatchH,
+        Math.max(6, Math.floor(swatchH * 0.24))
+      );
+      ctx.fill();
+      ctx.setStrokeStyle("rgba(15,23,42,0.12)");
       ctx.setLineWidth(1);
-      ctx.strokeRect(cardX + 18, cardY + 20, swatchSize, swatchSize);
+      ctx.stroke();
 
-      ctx.setFillStyle("#2D241B");
-      ctx.setFontSize(Math.max(22, Math.floor(layout.cardWidth * 0.13)));
-      ctx.fillText(item.code || "", cardX + 18 + swatchSize + 16, cardY + 33);
+      ctx.setTextAlign("center");
+      ctx.setTextBaseline("middle");
+      ctx.setFillStyle(chip.textColor || this.getTextColorByHex(chip.hex));
+      ctx.setFontSize(Math.max(10, Math.floor(Math.min(chip.codeSize, swatchH * 0.52))));
+      ctx.fillText(
+        chip.codeText || "",
+        cardX + chip.width / 2,
+        swatchTop + swatchH / 2
+      );
+
       ctx.setFillStyle("#65594A");
-      ctx.setFontSize(Math.max(18, Math.floor(layout.cardWidth * 0.1)));
-      ctx.fillText(`${item.count} 颗`, cardX + 18 + swatchSize + 16, cardY + 64);
-      ctx.fillText(`${item.percent}%`, cardX + 18 + swatchSize + 16, cardY + 88);
+      ctx.setFontSize(Math.max(10, chip.metaSize));
+      ctx.fillText(
+        chip.metaText || "",
+        cardX + chip.width / 2,
+        cardY + Math.floor(chip.height * 0.82)
+      );
     });
   },
-  async renderPosterExportImage(mode = "ultra", forPreview = false) {
-    const baseWidth = forPreview
+  async renderPosterExportImage(options = {}) {
+    const forPreview = Boolean(options.forPreview);
+    const forViewer = Boolean(options.forViewer);
+    const showGrid = Object.prototype.hasOwnProperty.call(options, "showGrid")
+      ? Boolean(options.showGrid)
+      : this.data.exportShowGrid !== false;
+    const showCodes = Object.prototype.hasOwnProperty.call(options, "showCodes")
+      ? Boolean(options.showCodes)
+      : this.data.exportShowCodes !== false;
+    const defaultWidth = forPreview
       ? EXPORT_PREVIEW_WIDTH
-      : (mode === "standard" ? EXPORT_PNG_STANDARD_WIDTH : EXPORT_PNG_ULTRA_WIDTH);
+      : (forViewer ? EXPORT_PREVIEW_HD_WIDTH : EXPORT_PNG_ULTRA_WIDTH);
+    const totalCells = Math.max(0, this.gridSize * this.gridSize);
+    let baseWidth = defaultWidth;
+    if (!forPreview && !forViewer) {
+      if (totalCells <= 26000) {
+        baseWidth = Math.max(baseWidth, 3600);
+      } else if (totalCells >= 42000) {
+        baseWidth = Math.min(baseWidth, 3000);
+      } else if (totalCells >= 30000) {
+        baseWidth = Math.min(baseWidth, 3200);
+      }
+    }
     const legend = this.getExportLegend();
-    const layout = this.computePosterLayout(baseWidth, legend.length);
+    const layout = this.computePngPosterLayout(baseWidth, legend, "ultra");
+    const shouldUseCodeOutline = showCodes && (forPreview || forViewer || totalCells <= 18000);
     await this.updateExportCanvasSizeAsync(layout.width, layout.height);
 
     await this.drawCanvasAsync("exportCanvas", (ctx) => {
@@ -4153,86 +4475,22 @@ Page({
         x: layout.grid.x,
         y: layout.grid.y,
         size: layout.grid.size,
-        showCodes: this.data.showColorCodeInEdit,
+        showCodes,
+        showCodeOutline: shouldUseCodeOutline,
         showAxisLabels: true,
-        axisStep: 1,
-        withGrid: true
+        axisStep: this.gridSize > 60 ? 5 : 1,
+        withGrid: showGrid
       });
       this.drawExportLegend(ctx, layout.legend, legend);
     });
 
     return this.canvasToTempFileAsync("exportCanvas", layout.width, layout.height);
   },
-  async renderPdfPreviewImage(mode = "a4", previewWidth = EXPORT_PREVIEW_WIDTH, paperSize = "A4") {
-    const safePaper = paperSize === "A3" ? "A3" : "A4";
-    const width = Math.max(720, Math.floor(previewWidth));
-    const height = mode === "a4"
-      ? Math.max(960, Math.floor(width * 1.33))
-      : Math.max(840, Math.floor(width * 1.02));
-    const splitPlan = this.computeExportDetailPlan(safePaper);
-    await this.updateExportCanvasSizeAsync(width, height);
-
-    await this.drawCanvasAsync("exportCanvas", (ctx) => {
-      ctx.setFillStyle("#F4ECDD");
-      ctx.fillRect(0, 0, width, height);
-
-      if (mode === "ultra") {
-        const legend = this.getExportLegend();
-        const layout = this.computePosterLayout(width, legend.length);
-        ctx.setFillStyle("#FFFFFF");
-        this.drawRoundedRectPath(ctx, 40, 40, width - 80, height - 80, 26);
-        ctx.fill();
-        this.drawExportGrid(ctx, {
-          x: layout.grid.x * 0.62,
-          y: 78,
-          size: width - 160,
-          showCodes: false,
-          showAxisLabels: true,
-          axisStep: this.gridSize > 60 ? 5 : 1,
-          withGrid: true
-        });
-        ctx.setFontSize(28);
-        ctx.setFillStyle("#4A3A26");
-        ctx.fillText("超大单页图册预览", 76, height - 88);
-        return;
-      }
-
-      const paperX = 66;
-      const paperY = 40;
-      const paperW = width - 132;
-      const paperH = height - 80;
-      ctx.setFillStyle("#FFFFFF");
-      this.drawRoundedRectPath(ctx, paperX, paperY, paperW, paperH, 24);
-      ctx.fill();
-
-      this.drawExportGrid(ctx, {
-        x: paperX + 44,
-        y: paperY + 44,
-        size: paperW - 88,
-        showCodes: false,
-        showAxisLabels: true,
-        axisStep: this.gridSize > 60 ? 5 : 1,
-        withGrid: true,
-        showPageSplit: true,
-        splitPlan
-      });
-
-      ctx.setFontSize(26);
-      ctx.setFillStyle("#4A3A26");
-      ctx.fillText(
-        `${safePaper} 图册：总览 + ${Math.max(1, splitPlan.pagesX * splitPlan.pagesY)} 张分页详图`,
-        paperX + 36,
-        paperY + paperH - 54
-      );
-    });
-
-    return this.canvasToTempFileAsync("exportCanvas", width, height);
-  },
   async refreshExportPreview() {
     if (!this.data.showExportPanel || !this.data.hasEditableGrid) return;
-    const format = this.data.exportFormat;
-    const mode = this.data.exportMode;
-    const summary = this.buildExportSummary(format, mode);
+    const showGrid = this.data.exportShowGrid !== false;
+    const showCodes = this.data.exportShowCodes !== false;
+    const summary = this.buildExportSummary(showGrid, showCodes);
     const previewToken = Date.now();
     this.exportPreviewToken = previewToken;
 
@@ -4241,19 +4499,16 @@ Page({
       exportPreviewTitle: summary.title,
       exportPreviewDesc: summary.desc,
       exportLargeHint: summary.largeHint,
-      exportPanelHint: format === "png"
-        ? "导出图片会在小程序本地生成，格内色号跟随当前“色号”开关。"
-        : (this.canUsePdfExport()
-          ? `导出图册会按 ${this.data.exportPdfPaperSize === "A3" ? "A3" : "A4"} 分页生成高清 PDF，并在手机里直接打开。`
-          : "图册预览已就绪；如需真正导出图册 PDF，请先在 app.globalData.pdfExportBaseUrl 配置服务域名。"),
-      exportPrimaryText: format === "png" ? "导出图片到相册" : "导出图册 PDF",
-      pdfExportReady: this.canUsePdfExport()
+      exportPanelHint: "将导出高清 PNG 图片，可按开关选择是否显示网格与色号。",
+      exportPrimaryText: "导出高清图片到相册"
     });
 
     try {
-      const previewPath = format === "png"
-        ? await this.renderPosterExportImage(mode, true)
-        : await this.renderPdfPreviewImage(mode, EXPORT_PREVIEW_WIDTH, this.data.exportPdfPaperSize || "A4");
+      const previewPath = await this.renderPosterExportImage({
+        forPreview: true,
+        showGrid,
+        showCodes
+      });
 
       if (this.exportPreviewToken !== previewToken) return;
       this.exportPreviewPath = previewPath;
@@ -4270,17 +4525,14 @@ Page({
     }
   },
   async openExportPanel() {
-    const format = this.exportSettings && this.exportSettings.format === "png" ? "png" : "pdf";
-    const mode = this.getActiveExportMode(format);
     await this.setDataAsync({
       showExportPanel: true,
-      exportFormat: format,
-      exportMode: mode,
-      exportModeOptions: this.buildExportModeOptions(format),
-      exportPdfPaperSize: this.exportSettings && this.exportSettings.pdfPaperSize === "A3" ? "A3" : "A4",
-      exportPdfPaperOptions: this.buildPdfPaperOptions(),
+      exportShowGrid: this.exportSettings ? this.exportSettings.showGrid !== false : true,
+      exportShowCodes: this.exportSettings ? this.exportSettings.showCodes !== false : true,
       exportPreviewPath: "",
-      pdfExportReady: this.canUsePdfExport(),
+      exportProgressVisible: false,
+      exportProgressPercent: 0,
+      exportProgressText: "",
       showExportPreviewViewer: false,
       exportViewerPath: "",
       exportViewerBusy: false,
@@ -4295,6 +4547,11 @@ Page({
     this.refreshExportPreview();
   },
   closeExportPanel() {
+    if (this.data.exportBusy) {
+      wx.showToast({ title: "正在导出，请稍候", icon: "none" });
+      return;
+    }
+    this.resetExportProgress();
     this.setData({
       showExportPanel: false,
       exportPreviewBusy: false,
@@ -4303,50 +4560,26 @@ Page({
       exportViewerBusy: false
     }, () => this.requestRedraw(false));
   },
-  handleExportFormatSelect(event) {
-    const format = event.currentTarget.dataset.format === "png" ? "png" : "pdf";
-    const mode = this.getActiveExportMode(format);
-    this.exportSettings.format = format;
-    this.persistExportSettings();
-    this.setData({
-      exportFormat: format,
-      exportMode: mode,
-      exportModeOptions: this.buildExportModeOptions(format),
-      exportPdfPaperSize: this.exportSettings && this.exportSettings.pdfPaperSize === "A3" ? "A3" : "A4",
-      exportPdfPaperOptions: this.buildPdfPaperOptions(),
-      showExportPreviewViewer: false
-    }, () => {
-      this.exportViewerCacheKey = "";
-      this.exportViewerPath = "";
-      this.refreshExportPreview();
-    });
-  },
-  handleExportModeSelect(event) {
-    const value = event.currentTarget.dataset.mode;
-    const format = this.data.exportFormat === "png" ? "png" : "pdf";
-    if (format === "png") {
-      this.exportSettings.pngMode = value === "standard" ? "standard" : "ultra";
+  handleExportOptionToggle(event) {
+    const key = event && event.currentTarget && event.currentTarget.dataset
+      ? event.currentTarget.dataset.key
+      : "";
+    if (key !== "exportShowGrid" && key !== "exportShowCodes") return;
+    const nextValue = !Boolean(this.data[key]);
+    if (!this.exportSettings || typeof this.exportSettings !== "object") {
+      this.exportSettings = getDefaultExportSettings();
+    }
+    if (key === "exportShowGrid") {
+      this.exportSettings.showGrid = nextValue;
     } else {
-      this.exportSettings.pdfMode = value === "ultra" ? "ultra" : "a4";
+      this.exportSettings.showCodes = nextValue;
     }
     this.persistExportSettings();
-    this.setData({
-      exportMode: this.getActiveExportMode(format),
+    const payload = {
       showExportPreviewViewer: false
-    }, () => {
-      this.exportViewerCacheKey = "";
-      this.exportViewerPath = "";
-      this.refreshExportPreview();
-    });
-  },
-  handleExportPaperSizeSelect(event) {
-    const value = event.currentTarget.dataset.paper === "A3" ? "A3" : "A4";
-    this.exportSettings.pdfPaperSize = value;
-    this.persistExportSettings();
-    this.setData({
-      exportPdfPaperSize: value,
-      showExportPreviewViewer: false
-    }, () => {
+    };
+    payload[key] = nextValue;
+    this.setData(payload, () => {
       this.exportViewerCacheKey = "";
       this.exportViewerPath = "";
       this.refreshExportPreview();
@@ -4372,11 +4605,12 @@ Page({
       exportViewerImageWidth: imageWidth
     });
   },
-  async buildExportViewerPath(format, mode, paperSize = "A4") {
-    if (format === "png") {
-      return this.renderPosterExportImage(mode, false);
-    }
-    return this.renderPdfPreviewImage(mode, EXPORT_PREVIEW_HD_WIDTH, paperSize);
+  async buildExportViewerPath() {
+    return this.renderPosterExportImage({
+      forViewer: true,
+      showGrid: this.data.exportShowGrid !== false,
+      showCodes: this.data.exportShowCodes !== false
+    });
   },
   closeExportPreviewViewer() {
     this.setData({ showExportPreviewViewer: false }, () => this.requestRedraw(false));
@@ -4395,10 +4629,7 @@ Page({
       wx.showToast({ title: "预览图生成中", icon: "none" });
       return;
     }
-    const format = this.data.exportFormat === "png" ? "png" : "pdf";
-    const mode = this.data.exportMode;
-    const paperSize = this.data.exportPdfPaperSize === "A3" ? "A3" : "A4";
-    const cacheKey = `${format}:${mode}:${paperSize}`;
+    const cacheKey = `${this.data.exportShowGrid ? 1 : 0}:${this.data.exportShowCodes ? 1 : 0}`;
 
     if (this.exportViewerCacheKey === cacheKey && this.data.exportViewerPath) {
       this.setData({ showExportPreviewViewer: true });
@@ -4413,7 +4644,7 @@ Page({
 
     wx.showLoading({ title: "生成高清预览", mask: true });
     try {
-      const previewPath = await this.buildExportViewerPath(format, mode, paperSize);
+      const previewPath = await this.buildExportViewerPath();
       const info = await this.getImageInfo(previewPath).catch(() => null);
       const baseWidth = this.computeViewerBaseWidth(info && info.width);
 
@@ -4423,9 +4654,7 @@ Page({
         exportViewerPath: previewPath,
         exportViewerBusy: false,
         exportViewerBaseWidth: baseWidth,
-        exportViewerHint: format === "png"
-          ? "这是导出图片的高清预览，可直接核对像素、色号和颗粒统计。"
-          : "这是导出图册的页面预览；确认后可直接导出 PDF。"
+        exportViewerHint: "这是导出图片的高清预览，可直接核对像素、色号和颗粒统计。"
       });
       this.updateExportViewerScale(1);
     } catch (error) {
@@ -4439,92 +4668,14 @@ Page({
       wx.hideLoading();
     }
   },
-  buildPdfExportPayload(mode) {
-    const legend = this.getExportLegend();
-    const grid = [];
-    const codeGrid = [];
-    for (let row = 0; row < this.gridSize; row += 1) {
-      const gridRow = [];
-      const codeRow = [];
-      for (let col = 0; col < this.gridSize; col += 1) {
-        const index = row * this.gridSize + col;
-        const colorIndex = this.gridIndexes[index];
-        if (this.isBackgroundCell(colorIndex)) {
-          gridRow.push(null);
-          codeRow.push(null);
-          continue;
-        }
-        gridRow.push(this.cellColorByIndex(colorIndex));
-        codeRow.push(this.data.showColorCodeInEdit ? this.getCellExportLabel(index) : this.getPaletteColor(colorIndex).code);
-      }
-      grid.push(gridRow);
-      codeGrid.push(codeRow);
-    }
-    return {
-      grid,
-      legend,
-      codeGrid: this.data.showColorCodeInEdit ? codeGrid : null,
-      title: this.data.workName || "Bead Pattern",
-      pdfMode: mode === "ultra" ? "ultra" : "a4",
-      pdfPaperSize: this.data.exportPdfPaperSize === "A3" ? "A3" : "A4"
-    };
-  },
-  requestPdfExport(payload) {
-    const baseUrl = this.getPdfExportBaseUrl();
-    if (!baseUrl) {
-      return Promise.reject(new Error("pdf-export-url-missing"));
-    }
-    return new Promise((resolve, reject) => {
-      wx.request({
-        url: `${baseUrl}/api/export-pdf`,
-        method: "POST",
-        data: payload,
-        responseType: "arraybuffer",
-        header: {
-          "content-type": "application/json"
-        },
-        success: (res) => {
-          if (res.statusCode < 200 || res.statusCode >= 300 || !res.data) {
-            reject(new Error(`pdf-export-status-${res.statusCode}`));
-            return;
-          }
-          resolve(res.data);
-        },
-        fail: reject
-      });
-    });
-  },
-  writePdfFile(arrayBuffer) {
-    const fs = wx.getFileSystemManager();
-    const filePath = `${wx.env.USER_DATA_PATH}/bead-pattern-${Date.now()}.pdf`;
-    return new Promise((resolve, reject) => {
-      fs.writeFile({
-        filePath,
-        data: arrayBuffer,
-        success: () => resolve(filePath),
-        fail: reject
-      });
-    });
-  },
-  async exportPdf(mode) {
-    const payload = this.buildPdfExportPayload(mode);
-    const arrayBuffer = await this.requestPdfExport(payload);
-    const filePath = await this.writePdfFile(arrayBuffer);
-    return new Promise((resolve, reject) => {
-      wx.openDocument({
-        filePath,
-        fileType: "pdf",
-        showMenu: true,
-        success: () => resolve(filePath),
-        fail: reject
-      });
-    });
-  },
-  async renderExportPng(mode = "ultra") {
+  async renderExportPng() {
     if (!this.gridSize || !this.gridIndexes.length) {
       throw new Error("empty grid");
     }
-    return this.renderPosterExportImage(mode, false);
+    return this.renderPosterExportImage({
+      showGrid: this.data.exportShowGrid !== false,
+      showCodes: this.data.exportShowCodes !== false
+    });
   },
   saveImageToAlbum(filePath) {
     return new Promise((resolve, reject) => {
@@ -4535,37 +4686,108 @@ Page({
       });
     });
   },
+  setExportProgress(percent, text = "", options = {}) {
+    const safePercent = clamp(Math.floor(toNumber(percent, 0)), 0, 100);
+    const payload = {};
+    if (this.data.exportProgressPercent !== safePercent) {
+      payload.exportProgressPercent = safePercent;
+    }
+    if (typeof text === "string" && text.length && this.data.exportProgressText !== text) {
+      payload.exportProgressText = text;
+    }
+    if (Object.prototype.hasOwnProperty.call(options, "visible")) {
+      const visible = Boolean(options.visible);
+      if (this.data.exportProgressVisible !== visible) {
+        payload.exportProgressVisible = visible;
+      }
+    }
+    if (Object.keys(payload).length) {
+      this.setData(payload);
+    }
+  },
+  startExportProgress(initialText = "正在准备导出...", options = {}) {
+    if (this.exportProgressTimer) {
+      clearInterval(this.exportProgressTimer);
+      this.exportProgressTimer = null;
+    }
+    const startPercent = clamp(Math.floor(toNumber(options.startPercent, 2)), 0, 99);
+    const capPercent = clamp(Math.floor(toNumber(options.capPercent, 24)), startPercent, 99);
+    this.exportProgressSoftPercent = startPercent;
+    this.exportProgressCapPercent = capPercent;
+    this.setExportProgress(startPercent, initialText, { visible: true });
+    this.exportProgressTimer = setInterval(() => {
+      if (!this.data.exportBusy) return;
+      if (this.exportProgressSoftPercent >= this.exportProgressCapPercent) return;
+      const gap = this.exportProgressCapPercent - this.exportProgressSoftPercent;
+      const step = gap > 18 ? 3 : (gap > 8 ? 2 : 1);
+      this.exportProgressSoftPercent = Math.min(
+        this.exportProgressCapPercent,
+        this.exportProgressSoftPercent + step
+      );
+      this.setExportProgress(this.exportProgressSoftPercent);
+    }, 280);
+  },
+  updateExportProgressStage(minPercent, capPercent, text = "") {
+    const safeMin = clamp(Math.floor(toNumber(minPercent, 0)), 0, 99);
+    const safeCap = clamp(Math.floor(toNumber(capPercent, safeMin)), safeMin, 99);
+    this.exportProgressCapPercent = safeCap;
+    if (this.exportProgressSoftPercent < safeMin) {
+      this.exportProgressSoftPercent = safeMin;
+    }
+    this.setExportProgress(this.exportProgressSoftPercent, text, { visible: true });
+  },
+  resetExportProgress() {
+    if (this.exportProgressTimer) {
+      clearInterval(this.exportProgressTimer);
+      this.exportProgressTimer = null;
+    }
+    this.exportProgressSoftPercent = 0;
+    this.exportProgressCapPercent = 0;
+    this.setData({
+      exportProgressVisible: false,
+      exportProgressPercent: 0,
+      exportProgressText: ""
+    });
+  },
+  finishExportProgress(doneText = "导出完成") {
+    if (this.exportProgressTimer) {
+      clearInterval(this.exportProgressTimer);
+      this.exportProgressTimer = null;
+    }
+    this.exportProgressSoftPercent = 100;
+    this.exportProgressCapPercent = 100;
+    this.setExportProgress(100, doneText, { visible: true });
+  },
   async handleExportConfirm() {
     if (this.data.exportBusy) return;
-    const format = this.data.exportFormat === "png" ? "png" : "pdf";
-    const mode = this.data.exportMode;
     this.setData({ exportBusy: true });
-    wx.showLoading({ title: "导出中", mask: true });
+    this.startExportProgress(
+      "正在准备高清图片导出...",
+      { startPercent: 3, capPercent: 18 }
+    );
 
     try {
-      if (format === "png") {
-        const pngPath = await this.renderExportPng(mode);
-        this.persistEditedWork(pngPath);
-        await this.saveImageToAlbum(pngPath);
-        wx.showToast({ title: "导出图片已保存到相册", icon: "success" });
-      } else {
-        if (!this.canUsePdfExport()) {
-          throw new Error("pdf-export-url-missing");
-        }
-        await this.exportPdf(mode);
-      }
+      this.updateExportProgressStage(12, 72, "正在生成高清画布（大图可能需要更久）...");
+      const pngPath = await this.renderExportPng();
+      this.updateExportProgressStage(78, 88, "正在整理导出文件...");
+      this.persistEditedWork(pngPath);
+      this.updateExportProgressStage(90, 98, "正在保存到相册...");
+      await this.saveImageToAlbum(pngPath);
+      this.finishExportProgress("导出完成，已保存到相册");
+      wx.showToast({ title: "导出图片已保存到相册", icon: "success" });
+      this.setData({ exportBusy: false });
       this.closeExportPanel();
     } catch (error) {
       console.error("export confirm failed", error);
+      this.resetExportProgress();
       wx.showToast({
-        title: error && error.message === "pdf-export-url-missing"
-          ? "请先配置图册 PDF 服务域名"
-          : "导出失败，请重试",
+        title: "导出失败，请重试",
         icon: "none"
       });
     } finally {
-      this.setData({ exportBusy: false });
-      wx.hideLoading();
+      if (this.data.exportBusy) {
+        this.setData({ exportBusy: false });
+      }
     }
   },
   async handleSaveExport() {

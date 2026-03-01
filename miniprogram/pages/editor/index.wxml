@@ -212,9 +212,10 @@
             data-index="{{item.index}}"
             bindtap="handleSelectBeadColor"
           >
-            <view class="editor-bead-color" style="background: {{item.hex}};"></view>
-            <text class="editor-bead-code">{{item.code}}</text>
-            <text class="editor-bead-count">{{item.count}} 颗</text>
+            <view class="editor-bead-color" style="background: {{item.hex}}; color: {{item.textColor}};">
+              <text class="editor-bead-color-code">{{item.code}}</text>
+            </view>
+            <text class="editor-bead-count">× {{item.count}}</text>
           </view>
         </block>
       </view>
@@ -241,58 +242,28 @@
       <view class="export-panel-head">
         <view>
           <view class="export-panel-title">保存和导图</view>
-          <view class="export-panel-sub">支持导出图片、导出图册，以及页面内高清预览。</view>
+          <view class="export-panel-sub">支持导出高清图片，并可选择是否显示网格与色号。</view>
         </view>
         <view class="export-panel-close" bindtap="closeExportPanel">关闭</view>
       </view>
 
       <view class="export-panel-section">
-        <view class="export-panel-label">导出类型</view>
+        <view class="export-panel-label">导出内容</view>
         <view class="export-chip-row export-chip-row-wrap">
           <view
-            class="export-chip {{exportFormat === 'pdf' ? 'is-active' : ''}}"
-            data-format="pdf"
-            bindtap="handleExportFormatSelect"
+            class="export-chip export-chip-wide {{exportShowGrid ? 'is-active' : ''}}"
+            data-key="exportShowGrid"
+            bindtap="handleExportOptionToggle"
           >
-            导出图册（PDF）
+            网格：{{exportShowGrid ? '显示' : '隐藏'}}
           </view>
           <view
-            class="export-chip {{exportFormat === 'png' ? 'is-active' : ''}}"
-            data-format="png"
-            bindtap="handleExportFormatSelect"
+            class="export-chip export-chip-wide {{exportShowCodes ? 'is-active' : ''}}"
+            data-key="exportShowCodes"
+            bindtap="handleExportOptionToggle"
           >
-            导出图片（PNG）
+            色号：{{exportShowCodes ? '显示' : '隐藏'}}
           </view>
-        </view>
-      </view>
-
-      <view class="export-panel-section">
-        <view class="export-panel-label">导出模式</view>
-        <view class="export-chip-row export-chip-row-wrap">
-          <block wx:for="{{exportModeOptions}}" wx:key="value">
-            <view
-              class="export-chip export-chip-wide {{exportMode === item.value ? 'is-active' : ''}}"
-              data-mode="{{item.value}}"
-              bindtap="handleExportModeSelect"
-            >
-              {{item.label}}
-            </view>
-          </block>
-        </view>
-      </view>
-
-      <view wx:if="{{exportFormat === 'pdf' && exportMode !== 'ultra'}}" class="export-panel-section">
-        <view class="export-panel-label">图册单页尺寸</view>
-        <view class="export-chip-row export-chip-row-wrap">
-          <block wx:for="{{exportPdfPaperOptions}}" wx:key="value">
-            <view
-              class="export-chip export-chip-wide {{exportPdfPaperSize === item.value ? 'is-active' : ''}}"
-              data-paper="{{item.value}}"
-              bindtap="handleExportPaperSizeSelect"
-            >
-              {{item.label}}
-            </view>
-          </block>
         </view>
       </view>
 
@@ -310,10 +281,20 @@
           bindtap="handlePreviewExportImage"
         />
         <view wx:else class="export-preview-placeholder">
-          <text>正在生成导出预览</text>
+          <text>正在生成图片预览</text>
         </view>
         <view class="export-preview-hint">{{exportPanelHint}}</view>
         <view wx:if="{{exportLargeHint}}" class="export-preview-large-hint">{{exportLargeHint}}</view>
+      </view>
+
+      <view wx:if="{{exportProgressVisible}}" class="export-progress-wrap">
+        <view class="export-progress-head">
+          <view class="export-progress-text">{{exportProgressText || '导出中...'}}</view>
+          <view class="export-progress-percent">{{exportProgressPercent}}%</view>
+        </view>
+        <view class="export-progress-track">
+          <view class="export-progress-fill" style="width: {{exportProgressPercent}}%;"></view>
+        </view>
       </view>
 
       <view class="export-panel-actions">
@@ -322,7 +303,7 @@
         </button>
         <button
           class="export-panel-btn export-panel-btn-primary"
-          disabled="{{exportBusy || (exportFormat === 'pdf' && !pdfExportReady)}}"
+          disabled="{{exportBusy}}"
           bindtap="handleExportConfirm"
         >
           {{exportPrimaryText}}
@@ -348,6 +329,9 @@
         scroll-x="true"
         scroll-y="true"
         enable-flex="true"
+        enhanced="true"
+        show-scrollbar="true"
+        fast-deceleration="true"
       >
         <view class="export-viewer-canvas">
           <image
@@ -365,9 +349,9 @@
         <view class="export-viewer-hint">{{exportViewerHint}}</view>
         <view class="export-viewer-zoom">
           <button class="export-viewer-zoom-btn" bindtap="handlePreviewZoomOut">缩小</button>
-          <view class="export-viewer-scale">{{exportViewerScaleText}}</view>
           <button class="export-viewer-zoom-btn" bindtap="handlePreviewZoomReset">重置</button>
           <button class="export-viewer-zoom-btn export-viewer-zoom-btn-primary" bindtap="handlePreviewZoomIn">放大</button>
+          <view class="export-viewer-scale">{{exportViewerScaleText}}</view>
         </view>
       </view>
     </view>
@@ -387,9 +371,10 @@
               data-index="{{item.index}}"
               bindtap="handleSelectBeadColor"
             >
-              <view class="editor-bead-color" style="background: {{item.hex}};"></view>
-              <text class="editor-bead-code">{{item.code}}</text>
-              <text class="editor-bead-count">{{item.count}} 颗</text>
+              <view class="editor-bead-color" style="background: {{item.hex}}; color: {{item.textColor}};">
+                <text class="editor-bead-color-code">{{item.code}}</text>
+              </view>
+              <text class="editor-bead-count">× {{item.count}}</text>
             </view>
           </block>
         </view>

@@ -584,7 +584,12 @@
   border-radius: 16rpx;
   overflow: hidden;
   border: 0;
-  background: #eceff3;
+  background:
+    linear-gradient(45deg, #e6e8ed 25%, transparent 25%, transparent 75%, #e6e8ed 75%, #e6e8ed),
+    linear-gradient(45deg, #e6e8ed 25%, transparent 25%, transparent 75%, #e6e8ed 75%, #e6e8ed),
+    #f2f4f8;
+  background-position: 0 0, 18rpx 18rpx;
+  background-size: 36rpx 36rpx;
 }
 
 .editor-canvas {
@@ -898,13 +903,16 @@
   height: 54rpx;
   border-radius: 12rpx;
   border: 1rpx solid rgba(15, 23, 42, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.editor-bead-code {
+.editor-bead-color-code {
   font-size: 21rpx;
-  color: #1f2430;
   font-weight: 700;
   line-height: 1.2;
+  letter-spacing: 0.3rpx;
 }
 
 .editor-bead-count {
@@ -1302,14 +1310,57 @@
   line-height: 1.5;
 }
 
-.export-panel-actions {
-  margin-top: 18rpx;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.export-progress-wrap {
+  margin-top: 14rpx;
+  padding: 12rpx 14rpx;
+  border-radius: 16rpx;
+  border: 1rpx solid #eadfcf;
+  background: #fff8ed;
+}
+
+.export-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10rpx;
 }
 
+.export-progress-text {
+  font-size: 21rpx;
+  color: #5f5447;
+  font-weight: 600;
+}
+
+.export-progress-percent {
+  font-size: 22rpx;
+  color: #ff3b5c;
+  font-weight: 700;
+}
+
+.export-progress-track {
+  margin-top: 10rpx;
+  height: 10rpx;
+  border-radius: 999rpx;
+  background: #f3e5d0;
+  overflow: hidden;
+}
+
+.export-progress-fill {
+  height: 100%;
+  border-radius: 999rpx;
+  background: linear-gradient(135deg, #ff8ba3, #ff4369);
+  transition: width 0.18s linear;
+}
+
+.export-panel-actions {
+  margin-top: 18rpx;
+  display: flex;
+  gap: 10rpx;
+  align-items: center;
+}
+
 .export-panel-btn {
+  min-width: 0;
   height: 68rpx;
   border-radius: 18rpx;
   font-size: 24rpx;
@@ -1317,6 +1368,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .export-panel-btn::after {
@@ -1324,12 +1378,14 @@
 }
 
 .export-panel-btn-light {
+  flex: 0 0 228rpx;
   background: #fff;
   color: #475467;
   border: 1rpx solid #e6eaf0;
 }
 
 .export-panel-btn-primary {
+  flex: 1;
   background: linear-gradient(135deg, #ff5478, #ff365f);
   color: #fff;
 }
@@ -1358,6 +1414,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .export-viewer-head {
@@ -1403,14 +1460,18 @@
 .export-viewer-scroll {
   margin-top: 16rpx;
   flex: 1;
+  min-height: 0;
+  height: calc(88vh - 290rpx);
   border-radius: 16rpx;
   background: #f5ecdf;
   border: 1rpx solid #e9dcc7;
+  white-space: nowrap;
 }
 
 .export-viewer-canvas {
+  display: inline-block;
   min-width: 100%;
-  min-height: 100%;
+  min-height: calc(100% - 24rpx);
   padding: 12rpx;
   box-sizing: border-box;
 }
@@ -1423,6 +1484,7 @@
 
 .export-viewer-footer {
   margin-top: 14rpx;
+  flex-shrink: 0;
 }
 
 .export-viewer-hint {
@@ -1440,7 +1502,10 @@
 
 .export-viewer-scale {
   min-width: 86rpx;
-  text-align: center;
+  height: 56rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 23rpx;
   color: #344054;
   font-weight: 700;
@@ -1450,13 +1515,17 @@
   flex: 1;
   margin: 0;
   height: 56rpx;
-  line-height: 56rpx;
+  line-height: 1;
+  padding: 0 10rpx;
   border-radius: 14rpx;
   border: 1rpx solid #e6eaf0;
   background: #fff;
   color: #475467;
   font-size: 22rpx;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .export-viewer-zoom-btn::after {
