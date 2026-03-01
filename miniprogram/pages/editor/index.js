@@ -147,7 +147,7 @@ Page({
     workName: "未命名图纸",
     gridSizeText: "--",
     viewMode: "edit",
-    currentTool: "paint",
+    currentTool: "move",
     scaleText: "100%",
     scalePercent: 100,
     scaleInputValue: "100",
@@ -163,7 +163,7 @@ Page({
     selectedColorIndex: 0,
     selectedColorCode: "A1",
     selectedColorHex: "#FFF6D4",
-    currentToolLabel: "画笔",
+    currentToolLabel: "拖拽",
     eraserMode: "normal",
     showEraserMenu: false,
     showGridLines: true,
@@ -303,7 +303,8 @@ Page({
       selectedColorCode: this.palette[0].code,
       selectedColorHex: this.palette[0].hex,
       viewMode: "edit",
-      currentToolLabel: TOOL_LABELS.paint,
+      currentTool: "move",
+      currentToolLabel: TOOL_LABELS.move,
       eraserMode: "normal",
       showEraserMenu: false,
       showGridLines: true,
@@ -1518,7 +1519,7 @@ Page({
     const canvasHeight = this.data.canvasHeight;
     const bounds = this.getDisplayBounds();
     const safeGrid = Math.max(1, Math.max(bounds.cols, bounds.rows));
-    return Math.max(4, Math.floor((Math.min(canvasWidth, canvasHeight) - 24) / safeGrid));
+    return Math.max(1, (Math.min(canvasWidth, canvasHeight) - 24) / safeGrid);
   },
   getScaleLimits() {
     const baseCell = this.getBaseCell();
@@ -1530,7 +1531,7 @@ Page({
     const { canvasWidth, canvasHeight } = this.data;
     const bounds = this.getDisplayBounds();
     const baseCell = this.getBaseCell();
-    const drawCell = Math.max(2, baseCell * this.scale);
+    const drawCell = Math.max(1, baseCell * this.scale);
     const boardWidth = drawCell * bounds.cols;
     const boardHeight = drawCell * bounds.rows;
     const keepX = Math.min(boardWidth * 0.7, canvasWidth * 0.7);
@@ -1567,7 +1568,7 @@ Page({
     const canvasHeight = this.data.canvasHeight;
     const bounds = this.getDisplayBounds();
     const baseCell = this.getBaseCell();
-    const drawCell = Math.max(2, baseCell * scale);
+    const drawCell = Math.max(1, baseCell * scale);
     const boardWidth = drawCell * bounds.cols;
     const boardHeight = drawCell * bounds.rows;
     const originX = (canvasWidth - boardWidth) / 2 + offsetX;
@@ -2497,7 +2498,7 @@ Page({
     const resolvedScale = Number.isFinite(scale) ? scale : this.getAutoFitScale(bounds);
     const { minScale, maxScale } = this.getScaleLimits();
     const safeScale = clamp(resolvedScale, minScale, maxScale);
-    const drawCell = Math.max(2, this.getBaseCell() * safeScale);
+    const drawCell = Math.max(1, this.getBaseCell() * safeScale);
     const contentCenterCol = bounds ? (bounds.minCol + bounds.maxCol + 1) / 2 : this.gridSize / 2;
     const contentCenterRow = bounds ? (bounds.minRow + bounds.maxRow + 1) / 2 : this.gridSize / 2;
     const boardCenter = this.gridSize / 2;
@@ -2843,7 +2844,7 @@ Page({
     const safeScale = clamp(nextScale, minScale, maxScale);
     const bounds = this.getDisplayBounds();
     const baseCell = this.getBaseCell();
-    const drawCell = Math.max(2, baseCell * safeScale);
+    const drawCell = Math.max(1, baseCell * safeScale);
     const boardWidth = drawCell * bounds.cols;
     const boardHeight = drawCell * bounds.rows;
     const canvasWidth = this.data.canvasWidth;

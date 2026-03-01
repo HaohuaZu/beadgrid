@@ -407,7 +407,7 @@ Page({
     const totalCols = boardCols + AXIS_RING_CELLS * 2;
     const cellByWidth = (canvasWidth - 24) / totalCols;
     const cellByHeight = (canvasHeight - 24) / totalRows;
-    return Math.max(4, Math.floor(Math.min(cellByWidth, cellByHeight)));
+    return Math.max(1, Math.min(cellByWidth, cellByHeight));
   },
   getScaleLimits() {
     // Min: board fits exactly in canvas (scale = 1.0)
@@ -427,7 +427,7 @@ Page({
     const totalRows = boardRows + AXIS_RING_CELLS * 2;
     const totalCols = boardCols + AXIS_RING_CELLS * 2;
     const baseCell = this.getBaseCell();
-    const drawCell = Math.max(2, baseCell * scale);
+    const drawCell = Math.max(1, baseCell * scale);
     const boardWidth = drawCell * boardCols;
     const boardHeight = drawCell * boardRows;
     const outerWidth = drawCell * totalCols;
@@ -878,7 +878,7 @@ Page({
     const { minScale, maxScale } = this.getScaleLimits();
     const safeScale = clamp(nextScale, minScale, maxScale);
     const baseCell = this.getBaseCell();
-    const drawCell = Math.max(2, baseCell * safeScale);
+    const drawCell = Math.max(1, baseCell * safeScale);
     const contentRows = Math.max(1, this.viewRows || this.gridSize || 1);
     const contentCols = Math.max(1, this.viewCols || this.gridSize || 1);
     const boardRows = contentRows + WHITE_RING_CELLS * 2;
