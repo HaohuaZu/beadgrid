@@ -48,6 +48,30 @@ function distanceSqRgb(a, b) {
   return dr * dr + dg * dg + db * db;
 }
 
+const PALETTE_LUMA_BY_INDEX = EDITOR_PALETTE.map((item) => {
+  const rgb = item && item.rgb ? item.rgb : parseHexRgb(item && item.hex);
+  return 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+});
+const PALETTE_CHROMA_BY_INDEX = EDITOR_PALETTE.map((item) => {
+  const rgb = item && item.rgb ? item.rgb : parseHexRgb(item && item.hex);
+  return Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+});
+const DARKEST_PALETTE_INDEX = (() => {
+  let idx = 0;
+  let minLum = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < PALETTE_LUMA_BY_INDEX.length; i += 1) {
+    const lum = Number(PALETTE_LUMA_BY_INDEX[i]);
+    if (!Number.isFinite(lum)) continue;
+    if (lum < minLum) {
+      minLum = lum;
+      idx = i;
+    }
+  }
+  return idx;
+})();
+const DARK_OUTLINE_LUMA_THRESHOLD = 108;
+const DARK_OUTLINE_CHROMA_THRESHOLD = 170;
+
 const DEMO_WORK_LIBRARY = [
   {
     id: "w-1",
@@ -258,6 +282,22 @@ Page({
       editorData: this.normalizeEditorData(work && work.editorData, work && work.size)
     };
   },
+  normalizeWorkLibrary(workLibrary) {
+    const source = Array.isArray(workLibrary) ? workLibrary : [];
+    const idCounter = Object.create(null);
+    return source.map((item, index) => {
+      const normalized = this.normalizeWork(item, index);
+      const baseId = String(normalized.id || `w-${Date.now()}-${index}`);
+      const count = (idCounter[baseId] || 0) + 1;
+      idCounter[baseId] = count;
+      if (count > 1) {
+        normalized.id = `${baseId}-${count}`;
+      } else {
+        normalized.id = baseId;
+      }
+      return normalized;
+    });
+  },
   serializeWork(work, index = 0) {
     const normalized = this.normalizeWork(work, index);
     return {
@@ -369,10 +409,21 @@ Page({
   },
   sortWorkLibrary(workLibrary) {
     const source = Array.isArray(workLibrary) ? workLibrary : this.data.workLibrary;
-    return [...source].sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+    return [...source].sort((a, b) => {
+      const timeDiff = (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0);
+      if (timeDiff !== 0) return timeDiff;
+      const idA = String(a && a.id ? a.id : "");
+      const idB = String(b && b.id ? b.id : "");
+      if (idA === idB) return 0;
+      return idA < idB ? 1 : -1;
+    });
   },
   computeDisplayWorks(workLibrary) {
-    return this.sortWorkLibrary(workLibrary);
+    const sorted = this.sortWorkLibrary(workLibrary);
+    return sorted.map((item, index) => ({
+      ...item,
+      renderKey: `${item && item.id ? item.id : "work"}-${Number(item && item.createdAt) || 0}-${index}`
+    }));
   },
   syncSummary(workLibrary) {
     const source = Array.isArray(workLibrary) ? workLibrary : this.data.workLibrary;
@@ -387,10 +438,11 @@ Page({
     });
   },
   applyWorkLibrary(workLibrary) {
-    const sortedLibrary = this.sortWorkLibrary(workLibrary);
+    const normalized = this.normalizeWorkLibrary(workLibrary);
+    const sortedLibrary = this.sortWorkLibrary(normalized);
     this.setData({
       workLibrary: sortedLibrary,
-      displayWorks: sortedLibrary,
+      displayWorks: this.computeDisplayWorks(sortedLibrary),
       totalCloneCount: sortedLibrary.reduce((sum, item) => sum + (item.clones || 0), 0)
     });
     this.persistWorkLibrary(sortedLibrary);
@@ -401,7 +453,8 @@ Page({
     });
   },
   updateWorkLibrary(id, updater) {
-    const workLibrary = this.data.workLibrary.map((work) => (work.id === id ? updater(work) : work));
+    const source = Array.isArray(this.data.workLibrary) ? this.data.workLibrary : [];
+    const workLibrary = source.map((work) => (work.id === id ? updater(work) : work));
     this.applyWorkLibrary(workLibrary);
   },
   prependWork(work) {
@@ -1087,6 +1140,142 @@ Page({
     }
     return output;
   },
+  resampleRgbaRegionToTarget(rawPixels, sourceWidth, sourceHeight, bounds, targetWidth, targetHeight) {
+    const safeTargetW = Math.max(1, Math.floor(targetWidth));
+    const safeTargetH = Math.max(1, Math.floor(targetHeight));
+    const safeSourceW = Math.max(1, Math.floor(sourceWidth));
+    const safeSourceH = Math.max(1, Math.floor(sourceHeight));
+    const out = new Uint8ClampedArray(safeTargetW * safeTargetH * 4);
+    const safeBounds = bounds || {
+      minX: 0,
+      minY: 0,
+      width: safeSourceW,
+      height: safeSourceH
+    };
+    const minX = clamp(Math.floor(safeBounds.minX || 0), 0, safeSourceW - 1);
+    const minY = clamp(Math.floor(safeBounds.minY || 0), 0, safeSourceH - 1);
+    const regionW = clamp(Math.floor(safeBounds.width || safeSourceW), 1, safeSourceW - minX);
+    const regionH = clamp(Math.floor(safeBounds.height || safeSourceH), 1, safeSourceH - minY);
+    const white = 255;
+    const downscaleX = regionW / safeTargetW;
+    const downscaleY = regionH / safeTargetH;
+    const downscaleFactor = Math.max(downscaleX, downscaleY);
+
+    for (let y = 0; y < safeTargetH; y += 1) {
+      const sy0 = minY + (y * regionH / safeTargetH);
+      const sy1 = minY + ((y + 1) * regionH / safeTargetH);
+      const yStart = Math.floor(sy0);
+      let yEnd = Math.ceil(sy1) - 1;
+      if (yEnd < yStart) yEnd = yStart;
+      for (let x = 0; x < safeTargetW; x += 1) {
+        const sx0 = minX + (x * regionW / safeTargetW);
+        const sx1 = minX + ((x + 1) * regionW / safeTargetW);
+        const xStart = Math.floor(sx0);
+        let xEnd = Math.ceil(sx1) - 1;
+        if (xEnd < xStart) xEnd = xStart;
+
+        let sumW = 0;
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let minLum = 255;
+        let maxLum = 0;
+        let darkLineW = 0;
+        let darkLineR = 0;
+        let darkLineG = 0;
+        let darkLineB = 0;
+
+        for (let sy = yStart; sy <= yEnd; sy += 1) {
+          if (sy < 0 || sy >= safeSourceH) continue;
+          for (let sx = xStart; sx <= xEnd; sx += 1) {
+            if (sx < 0 || sx >= safeSourceW) continue;
+            const overlapX = Math.max(0, Math.min(sx + 1, sx1) - Math.max(sx, sx0));
+            const overlapY = Math.max(0, Math.min(sy + 1, sy1) - Math.max(sy, sy0));
+            const weight = overlapX * overlapY;
+            if (weight <= 0) continue;
+            const offset = (sy * safeSourceW + sx) * 4;
+            const a = clamp((Number(rawPixels[offset + 3]) || 0) / 255, 0, 1);
+            const r = Number(rawPixels[offset]) || 0;
+            const g = Number(rawPixels[offset + 1]) || 0;
+            const b = Number(rawPixels[offset + 2]) || 0;
+            // Composite to white to keep transparent-edge colors stable on editor white canvas.
+            const cr = r * a + white * (1 - a);
+            const cg = g * a + white * (1 - a);
+            const cb = b * a + white * (1 - a);
+            const lum = 0.299 * cr + 0.587 * cg + 0.114 * cb;
+            const chroma = Math.max(cr, cg, cb) - Math.min(cr, cg, cb);
+            sumW += weight;
+            sumR += cr * weight;
+            sumG += cg * weight;
+            sumB += cb * weight;
+            if (lum < minLum) minLum = lum;
+            if (lum > maxLum) maxLum = lum;
+            // Preserve thin dark outlines (sleeve/collar/hat lines) under aggressive downsampling.
+            if (lum <= 82 && chroma <= 95) {
+              darkLineW += weight;
+              darkLineR += cr * weight;
+              darkLineG += cg * weight;
+              darkLineB += cb * weight;
+            }
+          }
+        }
+
+        const outOffset = (y * safeTargetW + x) * 4;
+        if (sumW <= 1e-7) {
+          out[outOffset] = 255;
+          out[outOffset + 1] = 255;
+          out[outOffset + 2] = 255;
+          out[outOffset + 3] = 255;
+        } else {
+          let outR = sumR / sumW;
+          let outG = sumG / sumW;
+          let outB = sumB / sumW;
+
+          if (downscaleFactor > 1.18) {
+            const darkCoverage = darkLineW / sumW;
+            const contrast = maxLum - minLum;
+            const avgLum = 0.299 * outR + 0.587 * outG + 0.114 * outB;
+            const centerSX = clamp(Math.floor((sx0 + sx1) / 2), 0, safeSourceW - 1);
+            const centerSY = clamp(Math.floor((sy0 + sy1) / 2), 0, safeSourceH - 1);
+            const centerOffset = (centerSY * safeSourceW + centerSX) * 4;
+            const centerA = clamp((Number(rawPixels[centerOffset + 3]) || 0) / 255, 0, 1);
+            const centerR = (Number(rawPixels[centerOffset]) || 0) * centerA + white * (1 - centerA);
+            const centerG = (Number(rawPixels[centerOffset + 1]) || 0) * centerA + white * (1 - centerA);
+            const centerB = (Number(rawPixels[centerOffset + 2]) || 0) * centerA + white * (1 - centerA);
+            const centerLum = 0.299 * centerR + 0.587 * centerG + 0.114 * centerB;
+
+            const shouldProtectDarkLine = (
+              (darkCoverage >= 0.015 && contrast >= 20 && avgLum >= 52)
+              || (centerLum <= 86 && contrast >= 16 && avgLum - centerLum >= 12)
+            );
+            if (shouldProtectDarkLine) {
+              const lineR = darkLineW > 1e-7 ? (darkLineR / darkLineW) : centerR;
+              const lineG = darkLineW > 1e-7 ? (darkLineG / darkLineW) : centerG;
+              const lineB = darkLineW > 1e-7 ? (darkLineB / darkLineW) : centerB;
+              const coverageScore = clamp((darkCoverage - 0.012) / 0.22, 0, 1);
+              const contrastScore = clamp((contrast - 16) / 80, 0, 1);
+              const scaleScore = clamp((downscaleFactor - 1.15) / 2.1, 0, 1);
+              const centerScore = centerLum <= 86 ? clamp((86 - centerLum) / 86, 0, 1) : 0;
+              const keep = clamp(
+                0.16 + 0.34 * coverageScore + 0.24 * contrastScore + 0.16 * scaleScore + 0.20 * centerScore,
+                0.12,
+                0.72
+              );
+              outR = outR * (1 - keep) + lineR * keep;
+              outG = outG * (1 - keep) + lineG * keep;
+              outB = outB * (1 - keep) + lineB * keep;
+            }
+          }
+
+          out[outOffset] = clamp(Math.round(outR), 0, 255);
+          out[outOffset + 1] = clamp(Math.round(outG), 0, 255);
+          out[outOffset + 2] = clamp(Math.round(outB), 0, 255);
+          out[outOffset + 3] = 255;
+        }
+      }
+    }
+    return out;
+  },
   scaleHexGridSmart(sourceGrid, sourceWidth, sourceHeight, targetWidth, targetHeight, backgroundHex = "#FFFFFF") {
     const output = new Array(targetWidth * targetHeight);
     const upscale = targetWidth >= sourceWidth && targetHeight >= sourceHeight;
@@ -1220,6 +1409,164 @@ Page({
       offsetY
     };
   },
+  isDarkOutlineIndex(index, backgroundIndex) {
+    if (!Number.isFinite(index) || index < 0) return false;
+    if (Number.isFinite(backgroundIndex) && index === backgroundIndex) return false;
+    const lum = Number(PALETTE_LUMA_BY_INDEX[index]);
+    const chroma = Number(PALETTE_CHROMA_BY_INDEX[index]);
+    if (!Number.isFinite(lum) || !Number.isFinite(chroma)) return false;
+    return lum <= DARK_OUTLINE_LUMA_THRESHOLD && chroma <= DARK_OUTLINE_CHROMA_THRESHOLD;
+  },
+  pickDominantDarkNeighborIndex(indexGrid, gridSize, col, row, backgroundIndex) {
+    const counter = Object.create(null);
+    const add = (idx, weight) => {
+      if (!this.isDarkOutlineIndex(idx, backgroundIndex)) return;
+      const key = String(idx);
+      counter[key] = (counter[key] || 0) + weight;
+    };
+    const left = col > 0 ? indexGrid[row * gridSize + (col - 1)] : -1;
+    const right = col + 1 < gridSize ? indexGrid[row * gridSize + (col + 1)] : -1;
+    const up = row > 0 ? indexGrid[(row - 1) * gridSize + col] : -1;
+    const down = row + 1 < gridSize ? indexGrid[(row + 1) * gridSize + col] : -1;
+    add(left, 2.4);
+    add(right, 2.4);
+    add(up, 2.4);
+    add(down, 2.4);
+    if (col > 1) add(indexGrid[row * gridSize + (col - 2)], 1.3);
+    if (col + 2 < gridSize) add(indexGrid[row * gridSize + (col + 2)], 1.3);
+    if (row > 1) add(indexGrid[(row - 2) * gridSize + col], 1.3);
+    if (row + 2 < gridSize) add(indexGrid[(row + 2) * gridSize + col], 1.3);
+    if (row > 0 && col > 0) add(indexGrid[(row - 1) * gridSize + (col - 1)], 1);
+    if (row > 0 && col + 1 < gridSize) add(indexGrid[(row - 1) * gridSize + (col + 1)], 1);
+    if (row + 1 < gridSize && col > 0) add(indexGrid[(row + 1) * gridSize + (col - 1)], 1);
+    if (row + 1 < gridSize && col + 1 < gridSize) add(indexGrid[(row + 1) * gridSize + (col + 1)], 1);
+
+    let bestIndex = -1;
+    let bestScore = -1;
+    Object.keys(counter).forEach((key) => {
+      const score = counter[key];
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = Number(key);
+      }
+    });
+    return Number.isFinite(bestIndex) && bestIndex >= 0 ? bestIndex : DARKEST_PALETTE_INDEX;
+  },
+  restoreDarkOutlineContinuity(indexGrid, gridSize, options = {}) {
+    const safeSize = Math.max(1, Math.floor(Number(gridSize) || 0));
+    const total = safeSize * safeSize;
+    if (!Array.isArray(indexGrid) || indexGrid.length < total) return Array.isArray(indexGrid) ? indexGrid.slice(0, total) : [];
+    const raw = options && options.rawTargetPixels;
+    const targetWidth = Math.max(1, Math.floor(Number(options && options.targetWidth) || 0));
+    const targetHeight = Math.max(1, Math.floor(Number(options && options.targetHeight) || 0));
+    const offsetX = Math.floor(Number(options && options.offsetX) || 0);
+    const offsetY = Math.floor(Number(options && options.offsetY) || 0);
+    const backgroundIndex = Number.isFinite(options && options.backgroundIndex)
+      ? Number(options.backgroundIndex)
+      : -1;
+    if (!raw || !targetWidth || !targetHeight || raw.length < targetWidth * targetHeight * 4) {
+      return indexGrid.slice(0, total);
+    }
+
+    const luma = new Float32Array(targetWidth * targetHeight);
+    for (let i = 0; i < targetWidth * targetHeight; i += 1) {
+      const o = i * 4;
+      luma[i] = 0.299 * raw[o] + 0.587 * raw[o + 1] + 0.114 * raw[o + 2];
+    }
+    const getRawLuma = (squareCol, squareRow) => {
+      const x = squareCol - offsetX;
+      const y = squareRow - offsetY;
+      if (x < 0 || y < 0 || x >= targetWidth || y >= targetHeight) return 255;
+      return luma[y * targetWidth + x];
+    };
+
+    let output = indexGrid.slice(0, total);
+    const startCol = clamp(offsetX, 1, safeSize - 2);
+    const endCol = clamp(offsetX + targetWidth - 1, 1, safeSize - 2);
+    const startRow = clamp(offsetY, 1, safeSize - 2);
+    const endRow = clamp(offsetY + targetHeight - 1, 1, safeSize - 2);
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      const source = output.slice(0, total);
+      let changed = false;
+      for (let row = startRow; row <= endRow; row += 1) {
+        for (let col = startCol; col <= endCol; col += 1) {
+          const idx = row * safeSize + col;
+          const current = source[idx];
+          if (this.isDarkOutlineIndex(current, backgroundIndex)) continue;
+
+          const lum = getRawLuma(col, row);
+          const lumL = getRawLuma(col - 1, row);
+          const lumR = getRawLuma(col + 1, row);
+          const lumU = getRawLuma(col, row - 1);
+          const lumD = getRawLuma(col, row + 1);
+          const lumUL = getRawLuma(col - 1, row - 1);
+          const lumUR = getRawLuma(col + 1, row - 1);
+          const lumDL = getRawLuma(col - 1, row + 1);
+          const lumDR = getRawLuma(col + 1, row + 1);
+          const grad = Math.max(
+            Math.abs(lum - lumL),
+            Math.abs(lum - lumR),
+            Math.abs(lum - lumU),
+            Math.abs(lum - lumD)
+          );
+          const rawDarkNeighbors = (
+            (lumL <= 156 ? 1 : 0) + (lumR <= 156 ? 1 : 0)
+            + (lumU <= 156 ? 1 : 0) + (lumD <= 156 ? 1 : 0)
+            + (lumUL <= 156 ? 1 : 0) + (lumUR <= 156 ? 1 : 0)
+            + (lumDL <= 156 ? 1 : 0) + (lumDR <= 156 ? 1 : 0)
+          );
+          if (lum > 196 && rawDarkNeighbors < 5) continue;
+          if (grad < 15 && rawDarkNeighbors < 4) continue;
+
+          const left = source[row * safeSize + (col - 1)];
+          const right = source[row * safeSize + (col + 1)];
+          const up = source[(row - 1) * safeSize + col];
+          const down = source[(row + 1) * safeSize + col];
+          const ul = source[(row - 1) * safeSize + (col - 1)];
+          const ur = source[(row - 1) * safeSize + (col + 1)];
+          const dl = source[(row + 1) * safeSize + (col - 1)];
+          const dr = source[(row + 1) * safeSize + (col + 1)];
+          const left2 = col > 1 ? source[row * safeSize + (col - 2)] : -1;
+          const right2 = col + 2 < safeSize ? source[row * safeSize + (col + 2)] : -1;
+          const up2 = row > 1 ? source[(row - 2) * safeSize + col] : -1;
+          const down2 = row + 2 < safeSize ? source[(row + 2) * safeSize + col] : -1;
+          const leftDark = this.isDarkOutlineIndex(left, backgroundIndex);
+          const rightDark = this.isDarkOutlineIndex(right, backgroundIndex);
+          const upDark = this.isDarkOutlineIndex(up, backgroundIndex);
+          const downDark = this.isDarkOutlineIndex(down, backgroundIndex);
+          const ulDark = this.isDarkOutlineIndex(ul, backgroundIndex);
+          const urDark = this.isDarkOutlineIndex(ur, backgroundIndex);
+          const dlDark = this.isDarkOutlineIndex(dl, backgroundIndex);
+          const drDark = this.isDarkOutlineIndex(dr, backgroundIndex);
+          const left2Dark = this.isDarkOutlineIndex(left2, backgroundIndex);
+          const right2Dark = this.isDarkOutlineIndex(right2, backgroundIndex);
+          const up2Dark = this.isDarkOutlineIndex(up2, backgroundIndex);
+          const down2Dark = this.isDarkOutlineIndex(down2, backgroundIndex);
+          const dark8 = (
+            (leftDark ? 1 : 0) + (rightDark ? 1 : 0) + (upDark ? 1 : 0) + (downDark ? 1 : 0)
+            + (ulDark ? 1 : 0) + (urDark ? 1 : 0) + (dlDark ? 1 : 0) + (drDark ? 1 : 0)
+          );
+          const straightBridge = (leftDark && rightDark) || (upDark && downDark);
+          const diagonalBridge = (ulDark && drDark) || (urDark && dlDark);
+          const cornerBridge = ((leftDark || rightDark) && (upDark || downDark) && dark8 >= 3);
+          const denseBridge = dark8 >= 5;
+          const twoStepBridge = (
+            (left2Dark && rightDark) || (leftDark && right2Dark)
+            || (up2Dark && downDark) || (upDark && down2Dark)
+          );
+          if (!(straightBridge || diagonalBridge || cornerBridge || denseBridge || twoStepBridge)) continue;
+
+          const replacement = this.pickDominantDarkNeighborIndex(source, safeSize, col, row, backgroundIndex);
+          if (!Number.isFinite(replacement) || replacement < 0 || replacement === current) continue;
+          output[idx] = replacement;
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    return output;
+  },
   buildCountMapFromHexGrid(hexGrid) {
     const counter = Object.create(null);
     for (let i = 0; i < hexGrid.length; i += 1) {
@@ -1280,7 +1627,9 @@ Page({
     const maxEdge = this.resolveMaxEdgeFromSelection();
     const preferWholeImportLayout = true;
 
-    const processingEdge = clamp(maxEdge * 2, maxEdge, 400);
+    // Use stronger supersampling on small max-edge sizes to reduce thin-line loss.
+    const supersampleFactor = maxEdge <= 60 ? 3.2 : (maxEdge <= 80 ? 2.8 : (maxEdge <= 120 ? 2.4 : 2));
+    const processingEdge = clamp(Math.round(maxEdge * supersampleFactor), maxEdge, 400);
     const sampledResult = await this.sampleImageToGrid(imagePath, imageInfo, processingEdge, processingEdge);
     const sampledImageData = sampledResult && sampledResult.imageData ? sampledResult.imageData : sampledResult;
     const quantized = quantizeToPalette(sampledImageData.data);
@@ -1325,9 +1674,6 @@ Page({
       height: Math.max(1, Math.floor(sourceRect.drawHeight || processingEdge))
     };
     const initialBounds = preferWholeImportLayout ? wholeImportBounds : adaptiveBounds;
-    const trimmedGrid = initialBounds
-      ? this.extractHexGridRect(quantized.hexGrid, processingEdge, initialBounds)
-      : quantized.hexGrid.slice(0, processingEdge * processingEdge);
     const trimmedWidth = initialBounds ? initialBounds.width : processingEdge;
     const trimmedHeight = initialBounds ? initialBounds.height : processingEdge;
     const ratio = trimmedWidth / Math.max(1, trimmedHeight);
@@ -1337,14 +1683,19 @@ Page({
     const targetHeight = ratio >= 1
       ? Math.max(1, Math.round(maxEdge / Math.max(1e-6, ratio)))
       : maxEdge;
-    const scaledRectGrid = this.scaleHexGridSmart(
-      trimmedGrid,
-      trimmedWidth,
-      trimmedHeight,
+    // Color-fidelity path:
+    // Resample from original RGBA region directly to target grid, then quantize once.
+    // This avoids hue drift caused by "quantize first -> scale quantized colors -> choose again".
+    const rawTargetPixels = this.resampleRgbaRegionToTarget(
+      sampledImageData.data,
+      processingEdge,
+      processingEdge,
+      initialBounds,
       targetWidth,
-      targetHeight,
-      backgroundHex
+      targetHeight
     );
+    const targetQuantized = quantizeToPalette(rawTargetPixels);
+    const scaledRectGrid = targetQuantized.hexGrid;
     const squareResult = this.buildSquareHexGrid(
       scaledRectGrid,
       targetWidth,
@@ -1357,10 +1708,18 @@ Page({
       ? PALETTE_INDEX_BY_HEX[String(backgroundHex).toUpperCase()]
       : 0;
 
-    const indexGrid = squareHexGrid.map((hex) => {
+    const indexGridRaw = squareHexGrid.map((hex) => {
       const key = String(hex || "").toUpperCase();
       const mapped = PALETTE_INDEX_BY_HEX[key];
       return Number.isFinite(mapped) ? mapped : safeBackgroundIndex;
+    });
+    const indexGrid = this.restoreDarkOutlineContinuity(indexGridRaw, maxEdge, {
+      rawTargetPixels,
+      targetWidth,
+      targetHeight,
+      offsetX: squareResult.offsetX,
+      offsetY: squareResult.offsetY,
+      backgroundIndex: safeBackgroundIndex
     });
     const usedColorIndexes = [...new Set(indexGrid)].sort((a, b) => a - b);
     const scaledCounts = this.buildCountMapFromHexGrid(scaledRectGrid);

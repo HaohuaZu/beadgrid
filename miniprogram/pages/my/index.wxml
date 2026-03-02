@@ -1,6 +1,6 @@
 <view class="page my-page">
   <view class="works-list">
-    <block wx:for="{{displayWorks}}" wx:key="id">
+    <block wx:for="{{displayWorks}}" wx:key="renderKey">
       <view class="work-card brand-panel">
         <view class="work-title-row">
           <view class="work-title-editable" data-id="{{item.id}}" bindtap="handleRenameWork">

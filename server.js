@@ -697,6 +697,10 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
   const width = raw.info.width;
   const cellSize = Math.floor(width / gridSize);
   const reps = [];
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+  const quantStep = 12;
+  const quant = (value) => clamp(Math.round(value / quantStep) * quantStep, 0, 255);
 
   for (let y = 0; y < gridSize; y += 1) {
     const yStart = y * cellSize;
@@ -710,6 +714,12 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
       let sumG = 0;
       let sumB = 0;
       const colorCounts = new Map();
+      let minLum = 255;
+      let maxLum = 0;
+      let darkCount = 0;
+      let darkR = 0;
+      let darkG = 0;
+      let darkB = 0;
 
       for (let py = yStart; py < yEnd; py += 1) {
         for (let px = xStart; px < xEnd; px += 1) {
@@ -721,10 +731,34 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
           const g = raw.data[idx + 1];
           const b = raw.data[idx + 2];
           count += 1;
+          const lum = toLum(r, g, b);
+          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+          if (lum < minLum) minLum = lum;
+          if (lum > maxLum) maxLum = lum;
+          // Protect dark thin outlines (e.g. sleeve/hat/collar linework) when edge size is small.
+          if (lum <= 80 && chroma <= 100) {
+            darkCount += 1;
+            darkR += r;
+            darkG += g;
+            darkB += b;
+          }
 
           if (samplingMode === SAMPLE_MODES.MODE) {
-            const key = (r << 16) | (g << 8) | b;
-            colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+            const qr = quant(r);
+            const qg = quant(g);
+            const qb = quant(b);
+            const key = (qr << 16) | (qg << 8) | qb;
+            const record = colorCounts.get(key) || {
+              count: 0,
+              sumR: 0,
+              sumG: 0,
+              sumB: 0
+            };
+            record.count += 1;
+            record.sumR += r;
+            record.sumG += g;
+            record.sumB += b;
+            colorCounts.set(key, record);
           } else {
             sumR += r;
             sumG += g;
@@ -738,27 +772,50 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
         continue;
       }
 
+      let repR = 0;
+      let repG = 0;
+      let repB = 0;
       if (samplingMode === SAMPLE_MODES.MODE) {
-        let bestKey = null;
-        let bestCount = -1;
-        for (const [key, colorCount] of colorCounts.entries()) {
-          if (colorCount > bestCount) {
-            bestCount = colorCount;
-            bestKey = key;
+        let bestRecord = null;
+        for (const record of colorCounts.values()) {
+          if (!bestRecord || record.count > bestRecord.count) {
+            bestRecord = record;
           }
         }
-        reps.push({
-          r: (bestKey >> 16) & 255,
-          g: (bestKey >> 8) & 255,
-          b: bestKey & 255
-        });
+        if (bestRecord && bestRecord.count > 0) {
+          repR = bestRecord.sumR / bestRecord.count;
+          repG = bestRecord.sumG / bestRecord.count;
+          repB = bestRecord.sumB / bestRecord.count;
+        } else {
+          repR = sumR / count;
+          repG = sumG / count;
+          repB = sumB / count;
+        }
       } else {
-        reps.push({
-          r: sumR / count,
-          g: sumG / count,
-          b: sumB / count
-        });
+        repR = sumR / count;
+        repG = sumG / count;
+        repB = sumB / count;
       }
+
+      const contrast = maxLum - minLum;
+      const darkCoverage = darkCount / count;
+      if (darkCount > 0 && contrast >= 18 && darkCoverage >= 0.015) {
+        const lineR = darkR / darkCount;
+        const lineG = darkG / darkCount;
+        const lineB = darkB / darkCount;
+        const coverageScore = clamp((darkCoverage - 0.012) / 0.22, 0, 1);
+        const contrastScore = clamp((contrast - 16) / 80, 0, 1);
+        const keep = clamp(0.12 + 0.34 * coverageScore + 0.24 * contrastScore, 0.1, 0.55);
+        repR = repR * (1 - keep) + lineR * keep;
+        repG = repG * (1 - keep) + lineG * keep;
+        repB = repB * (1 - keep) + lineB * keep;
+      }
+
+      reps.push({
+        r: clamp(repR, 0, 255),
+        g: clamp(repG, 0, 255),
+        b: clamp(repB, 0, 255)
+      });
     }
   }
 

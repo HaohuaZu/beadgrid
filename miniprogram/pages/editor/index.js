@@ -26,6 +26,7 @@ const EDITOR_STAGE_CHECKER_DARK = "#E6E8ED";
 const EDITOR_STAGE_CHECKER_LIGHT = "#F2F4F8";
 const EDITOR_STAGE_CHECKER_TILE = 18;
 const EDITOR_MIN_VISIBLE_RATIO = 0.3;
+const EDITOR_DIAG_LOG = true;
 let remixIconFontReady = false;
 const TOOL_LABELS = {
   paint: "画笔",
@@ -293,6 +294,8 @@ Page({
     this.edgePickerCloseLocked = false;
     this.edgePickerLockTimer = null;
     this.windowWidth = 375;
+    this.editorInstanceId = `editor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.lastWorkLibrarySource = "unknown";
     try {
       const sysInfo = wx.getSystemInfoSync();
       this.windowWidth = Number(sysInfo && sysInfo.windowWidth) || 375;
@@ -381,6 +384,12 @@ Page({
     this.pageScrollTop = toNumber(event && event.scrollTop, this.pageScrollTop || 0);
   },
   onUnload() {
+    this.logLoadDiagnostics("unload", {
+      workId: this.data.workId,
+      scale: this.scale,
+      offsetX: this.offsetX,
+      offsetY: this.offsetY
+    });
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
@@ -452,6 +461,197 @@ Page({
       cols = Math.max(1, Math.round(gridSize * ratio));
     }
     return this.buildCenteredVisibleBounds(cols, rows, gridSize);
+  },
+  buildVisibleBoundsAroundContent(contentBounds, width, height, gridSize) {
+    const size = Math.max(1, Math.floor(toNumber(gridSize, 0)));
+    if (!size || !contentBounds) return null;
+    const contentWidth = Math.max(1, Math.floor(toNumber(contentBounds.maxCol, 0) - toNumber(contentBounds.minCol, 0) + 1));
+    const contentHeight = Math.max(1, Math.floor(toNumber(contentBounds.maxRow, 0) - toNumber(contentBounds.minRow, 0) + 1));
+    const desiredWidth = clamp(Math.floor(toNumber(width, contentWidth)), 1, size);
+    const desiredHeight = clamp(Math.floor(toNumber(height, contentHeight)), 1, size);
+    const finalWidth = clamp(Math.max(contentWidth, desiredWidth), 1, size);
+    const finalHeight = clamp(Math.max(contentHeight, desiredHeight), 1, size);
+
+    const centerCol = (toNumber(contentBounds.minCol, 0) + toNumber(contentBounds.maxCol, 0)) / 2;
+    const centerRow = (toNumber(contentBounds.minRow, 0) + toNumber(contentBounds.maxRow, 0)) / 2;
+    const maxMinCol = Math.max(0, size - finalWidth);
+    const maxMinRow = Math.max(0, size - finalHeight);
+
+    const minCol = clamp(Math.round(centerCol - (finalWidth - 1) / 2), 0, maxMinCol);
+    const minRow = clamp(Math.round(centerRow - (finalHeight - 1) / 2), 0, maxMinRow);
+    return this.normalizeVisibleBounds({
+      minCol,
+      minRow,
+      maxCol: minCol + finalWidth - 1,
+      maxRow: minRow + finalHeight - 1
+    }, size);
+  },
+  getBoundsArea(bounds) {
+    if (!bounds) return 0;
+    const cols = Math.max(0, Number(bounds.cols) || (Number(bounds.maxCol) - Number(bounds.minCol) + 1) || 0);
+    const rows = Math.max(0, Number(bounds.rows) || (Number(bounds.maxRow) - Number(bounds.minRow) + 1) || 0);
+    return cols * rows;
+  },
+  doesBoundsContain(outer, inner) {
+    if (!outer || !inner) return false;
+    return outer.minCol <= inner.minCol
+      && outer.minRow <= inner.minRow
+      && outer.maxCol >= inner.maxCol
+      && outer.maxRow >= inner.maxRow;
+  },
+  getGridDiagnostics(indexGrid, size) {
+    const safeSize = Math.max(0, Number(size) || 0);
+    const total = safeSize * safeSize;
+    const list = Array.isArray(indexGrid) ? indexGrid : [];
+    let nonTransparent = 0;
+    let nonBackground = 0;
+    let invalidPalette = 0;
+    let minCol = safeSize;
+    let minRow = safeSize;
+    let maxCol = -1;
+    let maxRow = -1;
+    for (let i = 0; i < Math.min(total, list.length); i += 1) {
+      const idx = Number(list[i]);
+      if (!Number.isFinite(idx)) {
+        invalidPalette += 1;
+        continue;
+      }
+      if (idx >= 0) nonTransparent += 1;
+      if (idx >= this.palette.length) invalidPalette += 1;
+      if (!this.isBackgroundCell(idx)) {
+        nonBackground += 1;
+        const row = Math.floor(i / safeSize);
+        const col = i - row * safeSize;
+        if (col < minCol) minCol = col;
+        if (row < minRow) minRow = row;
+        if (col > maxCol) maxCol = col;
+        if (row > maxRow) maxRow = row;
+      }
+    }
+    return {
+      pageWidth: safeSize,
+      pageHeight: safeSize,
+      expectedPixels: total,
+      actualPixels: list.length,
+      nonTransparentPixels: nonTransparent,
+      nonBackgroundPixels: nonBackground,
+      invalidPaletteIndexes: invalidPalette,
+      minX: maxCol >= minCol ? minCol : -1,
+      maxX: maxCol >= minCol ? maxCol : -1,
+      minY: maxRow >= minRow ? minRow : -1,
+      maxY: maxRow >= minRow ? maxRow : -1
+    };
+  },
+  assertLoadGridIntegrity(indexGrid, size, context = "") {
+    const safeSize = Math.max(0, Number(size) || 0);
+    const expected = safeSize * safeSize;
+    const list = Array.isArray(indexGrid) ? indexGrid : [];
+    if (list.length < expected) {
+      console.warn("[editor][diag] grid length mismatch", {
+        context,
+        expected,
+        actual: list.length
+      });
+    }
+    if (!safeSize || !expected) return;
+    let invalidPalette = 0;
+    for (let i = 0; i < expected && i < list.length; i += 1) {
+      const idx = Number(list[i]);
+      if (!Number.isFinite(idx)) {
+        invalidPalette += 1;
+        continue;
+      }
+      if (idx < -1 || idx >= this.palette.length) {
+        invalidPalette += 1;
+      }
+    }
+    if (invalidPalette > 0) {
+      console.warn("[editor][diag] palette index out of range", {
+        context,
+        invalidPalette,
+        expected
+      });
+    }
+  },
+  logLoadDiagnostics(stage, payload = {}) {
+    if (!EDITOR_DIAG_LOG) return;
+    try {
+      console.info("[editor][diag]", {
+        stage,
+        instanceId: this.editorInstanceId || "",
+        ...payload
+      });
+    } catch (error) {
+      // ignore log errors
+    }
+  },
+  chooseDisplayBounds({
+    savedVisibleBounds,
+    contentAwareBounds,
+    fallbackVisibleBounds,
+    contentBounds,
+    gridSize,
+    sizePair
+  }) {
+    const size = Math.max(1, Number(gridSize) || 1);
+    const saved = this.normalizeVisibleBounds(savedVisibleBounds, size);
+    const contentAware = this.normalizeVisibleBounds(contentAwareBounds, size);
+    const fallback = this.normalizeVisibleBounds(fallbackVisibleBounds, size);
+    const content = this.normalizeVisibleBounds(contentBounds, size);
+
+    const contentTooSmall = contentAware
+      && (
+        contentAware.cols < Math.max(8, Math.floor(size * 0.35))
+        || contentAware.rows < Math.max(8, Math.floor(size * 0.35))
+      );
+    const savedContainsContent = !saved || !content || this.doesBoundsContain(saved, content);
+    const savedMatchesSize = !saved || !sizePair || (
+      Math.abs(saved.cols - Number(sizePair.width || 0)) <= Math.max(2, Math.floor(size * 0.2))
+      && Math.abs(saved.rows - Number(sizePair.height || 0)) <= Math.max(2, Math.floor(size * 0.2))
+    );
+    // Product requirement: keep the full imported layout visible by default.
+    // So when we know intended frame (savedVisibleBounds or size fallback), do not crop by content bounds.
+    const hasIntendedFrame = Boolean(saved || fallback);
+
+    let chosen = null;
+    let reason = "none";
+
+    // 1) Prefer saved frame when valid.
+    if (saved && savedContainsContent && (savedMatchesSize || !sizePair)) {
+      chosen = saved;
+      reason = "savedVisibleBounds";
+      // 2) Then prefer size-based frame (full imported rectangle).
+    } else if (fallback) {
+      chosen = fallback;
+      reason = "sizeFallback";
+      // 3) If only saved exists but size text is missing/inaccurate, still use saved.
+    } else if (saved && savedContainsContent) {
+      chosen = saved;
+      reason = "savedFallback";
+      // 4) Content-aware crop is last resort only when no intended frame exists.
+    } else if (!hasIntendedFrame && contentAware) {
+      chosen = contentAware;
+      reason = contentTooSmall ? "contentAwareTooSmallOnlyFallback" : "contentAware";
+    } else if (contentAware) {
+      chosen = contentAware;
+      reason = "contentAwareForced";
+    }
+
+    this.logLoadDiagnostics("display-bounds-select", {
+      gridSize: size,
+      reason,
+      savedArea: this.getBoundsArea(saved),
+      contentArea: this.getBoundsArea(contentAware),
+      fallbackArea: this.getBoundsArea(fallback),
+      savedContainsContent,
+      savedMatchesSize,
+      contentTooSmall,
+      saved,
+      contentAware,
+      fallback
+    });
+
+    return chosen;
   },
   getSerializableVisibleBounds() {
     if (!this.displayBoundsOverride) return null;
@@ -927,6 +1127,12 @@ Page({
       );
     });
   },
+  getProcessingEdgeForTarget(targetEdge) {
+    const safe = clamp(parseInt(targetEdge, 10) || 0, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
+    if (!safe) return 0;
+    const factor = safe <= 60 ? 3.2 : (safe <= 80 ? 2.8 : (safe <= 120 ? 2.4 : 2));
+    return clamp(Math.round(safe * factor), safe, 400);
+  },
   async rebuildGridFromAiPreview(imagePath, gridSize) {
     if (!imagePath || !gridSize) return [];
     let sourceWidth = gridSize;
@@ -959,7 +1165,7 @@ Page({
     if (!imagePath) return null;
     const effectiveTarget = clamp(parseInt(targetMaxEdge, 10) || 0, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
     if (!effectiveTarget) return null;
-    const processingEdge = clamp(effectiveTarget * 2, effectiveTarget, 400);
+    const processingEdge = this.getProcessingEdgeForTarget(effectiveTarget);
     let sourceWidth = processingEdge;
     let sourceHeight = processingEdge;
     try {
@@ -992,7 +1198,7 @@ Page({
     if (!imagePath) return null;
     const nextGridSize = clamp(parseInt(targetMaxEdge, 10) || 0, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
     if (!nextGridSize) return null;
-    const processingEdge = clamp(nextGridSize * 2, nextGridSize, 400);
+    const processingEdge = this.getProcessingEdgeForTarget(nextGridSize);
     let sourceWidth = processingEdge;
     let sourceHeight = processingEdge;
     try {
@@ -1149,23 +1355,37 @@ Page({
   },
   readWorkLibrary() {
     const runtime = this.getRuntimeWorkCache();
-    if (runtime.length) return runtime;
+    if (runtime.length) {
+      this.lastWorkLibrarySource = "runtime-cache";
+      return runtime;
+    }
 
     let cached = null;
     try {
       cached = wx.getStorageSync(STORAGE_KEY);
+      this.lastWorkLibrarySource = "storage-primary";
       if (!Array.isArray(cached) || !cached.length) {
         const backup = wx.getStorageSync(BACKUP_STORAGE_KEY);
-        if (Array.isArray(backup) && backup.length) cached = backup;
+        if (Array.isArray(backup) && backup.length) {
+          cached = backup;
+          this.lastWorkLibrarySource = "storage-backup";
+        }
       }
       if ((!Array.isArray(cached) || !cached.length) && LEGACY_STORAGE_KEY) {
         const legacy = wx.getStorageSync(LEGACY_STORAGE_KEY);
-        if (Array.isArray(legacy) && legacy.length) cached = legacy;
+        if (Array.isArray(legacy) && legacy.length) {
+          cached = legacy;
+          this.lastWorkLibrarySource = "storage-legacy";
+        }
       }
     } catch (error) {
       console.warn("read work library failed", error);
+      this.lastWorkLibrarySource = "storage-error";
     }
 
+    if (!Array.isArray(cached) || !cached.length) {
+      this.lastWorkLibrarySource = "empty";
+    }
     return Array.isArray(cached) ? cached : [];
   },
   writeWorkLibrary(list) {
@@ -1186,7 +1406,19 @@ Page({
     }
 
     const workLibrary = this.readWorkLibrary();
-    const work = workLibrary.find((item) => item && item.id === workId);
+    const workIndex = workLibrary.findIndex((item) => item && item.id === workId);
+    const work = workIndex >= 0 ? workLibrary[workIndex] : null;
+    const duplicateCount = workLibrary.reduce((sum, item) => {
+      if (!item || item.id !== workId) return sum;
+      return sum + 1;
+    }, 0);
+    this.logLoadDiagnostics("load-start", {
+      workId,
+      workIndex,
+      duplicateCount,
+      librarySize: Array.isArray(workLibrary) ? workLibrary.length : 0,
+      librarySource: this.lastWorkLibrarySource
+    });
     if (!work) {
       wx.showToast({ title: "作品不存在", icon: "none" });
       this.setData({ hasEditableGrid: false });
@@ -1228,6 +1460,18 @@ Page({
       indexGridRaw = this.remapLegacyFine220ToMard221(indexGridRaw.slice(0, total));
     }
     const detectedBroken = hasValidGrid ? this.looksShiftedToCorner(indexGridRaw, gridSize) : false;
+    this.assertLoadGridIntegrity(indexGridRaw, gridSize, "raw");
+    this.logLoadDiagnostics("grid-raw", {
+      workId,
+      workIndex,
+      hasPackedGrid,
+      hasValidGrid,
+      editorVersion,
+      isUserEdited,
+      paletteVersion,
+      detectedBroken,
+      grid: this.getGridDiagnostics(indexGridRaw, gridSize)
+    });
     // Heavy rebuild should only run when packed grid is missing/invalid.
     // If packed grid exists, trust it and avoid color drift from preview-image re-quantization.
     const shouldTryPreviewRebuild = Boolean(
@@ -1273,18 +1517,55 @@ Page({
       return;
     }
 
+    const shouldRecenterOnLoad = Boolean(
+      !hasPackedGrid
+      || shouldLegacyRemap
+      || (editorVersion < EDITOR_DATA_SCHEMA_VERSION && !isUserEdited)
+      || (detectedBroken && !isUserEdited && !paletteVersion)
+    );
     this.gridSize = gridSize;
-    this.gridIndexes = this.recenterLegacyGrid(indexGridRaw.slice(0, total), gridSize);
+    this.gridIndexes = shouldRecenterOnLoad
+      ? this.recenterLegacyGrid(indexGridRaw.slice(0, total), gridSize)
+      : indexGridRaw.slice(0, total);
+    this.backgroundIndexSet = this.computeBackgroundIndexSet();
+    this.assertLoadGridIntegrity(this.gridIndexes, gridSize, "normalized");
     const savedVisibleBounds = this.normalizeVisibleBounds(
       editorData && editorData.visibleBounds,
       gridSize
     );
     const sizePair = parseSizePairFromText(work && work.size);
+    const contentBounds = this.computeGridContentBoundsStrict(this.gridIndexes, gridSize)
+      || this.computeGridContentBounds(this.gridIndexes, gridSize);
+    const contentAwareBounds = contentBounds
+      ? this.buildVisibleBoundsAroundContent(
+        contentBounds,
+        null,
+        null,
+        gridSize
+      )
+      : null;
     const fallbackVisibleBounds = sizePair
       ? this.buildCenteredVisibleBounds(sizePair.width, sizePair.height, gridSize)
       : null;
-    this.displayBoundsOverride = savedVisibleBounds || fallbackVisibleBounds;
-    this.backgroundIndexSet = this.computeBackgroundIndexSet();
+    this.displayBoundsOverride = this.chooseDisplayBounds({
+      savedVisibleBounds,
+      contentAwareBounds,
+      fallbackVisibleBounds,
+      contentBounds,
+      gridSize,
+      sizePair
+    });
+    this.logLoadDiagnostics("grid-normalized", {
+      workId,
+      workIndex,
+      shouldRecenterOnLoad,
+      displayBoundsOverride: this.displayBoundsOverride || null,
+      savedVisibleBounds: savedVisibleBounds || null,
+      contentBounds: contentBounds || null,
+      contentAwareBounds: contentAwareBounds || null,
+      fallbackVisibleBounds: fallbackVisibleBounds || null,
+      grid: this.getGridDiagnostics(this.gridIndexes, gridSize)
+    });
     this.rebuildResizeMasterFromCurrent();
     this.hasManualEdits = false;
     this.undoStack = [];
@@ -1315,9 +1596,21 @@ Page({
       maxEdgeError: ""
     });
 
-    this.centerContent();
-
+    // Only call centerContent() if the canvas has already been measured and initialized.
+    // If measureCanvas() hasn't run yet, it will call centerContent() itself in its
+    // initEditorCanvas2d.finally() callback (line ~1387) with the correct dimensions.
+    // Calling centerContent() here before canvas measurement produces a wrong scale based
+    // on the default canvasWidth/canvasHeight (900x900) instead of actual screen dimensions.
     if (this.canvasReady) {
+      this.centerContent();
+      this.logLoadDiagnostics("post-center", {
+        workId,
+        workIndex,
+        scale: this.scale,
+        offsetX: this.offsetX,
+        offsetY: this.offsetY,
+        board: this.getBoardMetrics(this.scale, this.offsetX, this.offsetY)
+      });
       this.requestRedraw(false);
     }
     this.syncHistoryState();
@@ -1444,7 +1737,7 @@ Page({
         },
         fillText: (text, x, y) => raw.fillText(String(text), x, y),
         drawImage: (...args) => raw.drawImage(...args),
-        draw: () => {}
+        draw: () => { }
       };
     }
     return wx.createCanvasContext("editorCanvas", this);
@@ -1549,8 +1842,13 @@ Page({
     const canvasWidth = this.data.canvasWidth;
     const canvasHeight = this.data.canvasHeight;
     const bounds = this.getDisplayBounds();
-    const safeGrid = Math.max(1, Math.max(bounds.cols, bounds.rows));
-    return Math.max(1, (Math.min(canvasWidth, canvasHeight) - 24) / safeGrid);
+    const safeCols = Math.max(1, Number(bounds && bounds.cols) || 1);
+    const safeRows = Math.max(1, Number(bounds && bounds.rows) || 1);
+    const usableWidth = Math.max(80, canvasWidth - 24);
+    const usableHeight = Math.max(80, canvasHeight - 24);
+    // Fit by real width/height ratio instead of square max-edge to avoid
+    // opening non-square patterns with large blank areas.
+    return Math.max(1, Math.min(usableWidth / safeCols, usableHeight / safeRows));
   },
   getScaleLimits() {
     const baseCell = this.getBaseCell();
@@ -1984,6 +2282,21 @@ Page({
 
         let best = bgIndex;
         let bestScore = Number.POSITIVE_INFINITY;
+
+        let minLuma = 255;
+        for (const key in colorWeights) {
+          const support = colorWeights[key];
+          const idx = Number(key);
+          if (idx === bgIndex) continue;
+          if (support >= 0.8) {
+            const color = this.getPaletteColor(idx);
+            const rgb = color && color.rgb ? color.rgb : parseHexRgb(color && color.hex);
+            const luma = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+            if (luma < minLuma) minLuma = luma;
+          }
+        }
+        const targetLuma = 0.299 * targetRgb.r + 0.587 * targetRgb.g + 0.114 * targetRgb.b;
+
         for (let i = 0; i < candidates.length; i += 1) {
           const idx = candidates[i];
           if (idx === bgIndex) continue;
@@ -1992,7 +2305,16 @@ Page({
           const dist = distanceSqRgb(targetRgb, rgb);
           const support = colorWeights[String(idx)] || 0;
           const centerBonus = idx === centerIndex ? 0.16 : 0;
-          const score = dist - support * 2200 - centerBonus * 1800;
+
+          let edgeBonus = 0;
+          const luma = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+          // Outline preservation: if this color is the local darkest color, is significantly darker 
+          // than average, and has some solid support (>0.8 pixels), boost it aggressively.
+          if (support >= 0.8 && luma <= minLuma + 5 && luma < targetLuma - 12 && luma < 95) {
+            edgeBonus = 40000 + support * 12000;
+          }
+
+          const score = dist - support * 2200 - centerBonus * 1800 - edgeBonus;
           if (score < bestScore) {
             bestScore = score;
             best = idx;
@@ -2539,12 +2861,14 @@ Page({
     const safeBounds = bounds || this.getDisplayBounds();
     const widthCells = safeBounds ? (safeBounds.maxCol - safeBounds.minCol + 1) : this.gridSize;
     const heightCells = safeBounds ? (safeBounds.maxRow - safeBounds.minRow + 1) : this.gridSize;
-    const contentCells = Math.max(widthCells, heightCells, 1);
-
-    const stageEdge = Math.min(this.data.canvasWidth, this.data.canvasHeight);
-    const targetEdge = Math.max(220, stageEdge - 72);
+    const safeWidthCells = Math.max(1, widthCells);
+    const safeHeightCells = Math.max(1, heightCells);
+    const targetWidth = Math.max(80, this.data.canvasWidth - 24);
+    const targetHeight = Math.max(80, this.data.canvasHeight - 24);
     const baseCell = this.getBaseCell();
-    const scale = targetEdge / (contentCells * baseCell);
+    const fitScaleX = targetWidth / (safeWidthCells * baseCell);
+    const fitScaleY = targetHeight / (safeHeightCells * baseCell);
+    const scale = Math.min(fitScaleX, fitScaleY);
     const { minScale, maxScale } = this.getScaleLimits();
     return clamp(scale, minScale, maxScale);
   },
@@ -4466,6 +4790,20 @@ Page({
     const legend = this.getExportLegend();
     const layout = this.computePngPosterLayout(baseWidth, legend, "ultra");
     const shouldUseCodeOutline = showCodes && (forPreview || forViewer || totalCells <= 18000);
+    this.logLoadDiagnostics("export-render", {
+      workId: this.data.workId,
+      mode: forPreview ? "preview" : (forViewer ? "viewer" : "album"),
+      showGrid,
+      showCodes,
+      totalCells,
+      exportWidth: layout.width,
+      exportHeight: layout.height,
+      exportScale: Number(layout.grid && layout.grid.size) / Math.max(1, this.gridSize),
+      exportBounds: this.getDisplayBounds(),
+      scale: this.scale,
+      offsetX: this.offsetX,
+      offsetY: this.offsetY
+    });
     await this.updateExportCanvasSizeAsync(layout.width, layout.height);
 
     await this.drawCanvasAsync("exportCanvas", (ctx) => {
