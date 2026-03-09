@@ -10,57 +10,96 @@
           <text class="work-status {{item.isGenerating ? 'is-generating' : ''}} {{item.isFailed ? 'is-failed' : ''}}">{{item.status}}</text>
         </view>
 
-        <view class="preview-row">
+        <view class="preview-row {{item.isBlankCanvasStyle ? 'is-single' : ''}}">
+          <view
+            wx:if="{{item.isBlankCanvasStyle}}"
+            class="preview-block preview-block-grid preview-block-single preview-tone-{{item.previewTones.grid}}"
+            style="{{item.previewDisplayImages.grid ? 'background:#FFFFFF;' : ''}}"
+            data-work-id="{{item.id}}"
+            data-view-type="grid"
+            bindtap="handleOpenWorkPreview"
+          >
+            <image
+              wx:if="{{item.previewDisplayImages.grid}}"
+              class="preview-image preview-image-grid preview-image-pixel"
+              src="{{item.previewDisplayImages.grid}}"
+              mode="aspectFit"
+              lazy-load="true"
+              data-work-id="{{item.id}}"
+              data-view-type="grid"
+              binderror="handleWorkPreviewImageError"
+            ></image>
+            <block wx:if="{{!item.previewDisplayImages.grid}}">
+              <view class="preview-placeholder">图纸</view>
+            </block>
+            <view class="preview-label">图纸</view>
+          </view>
+          <block wx:else>
           <view
             class="preview-block preview-tone-{{item.previewTones.origin}}"
+            style="{{item.previewDisplayImages.origin ? 'background:#FFFFFF;' : ''}}"
             data-work-id="{{item.id}}"
             data-view-type="origin"
             bindtap="handleOpenWorkPreview"
           >
             <image
-              wx:if="{{item.previewImages.origin}}"
+              wx:if="{{item.previewDisplayImages.origin}}"
               class="preview-image"
-              src="{{item.previewImages.origin}}"
-              mode="aspectFill"
+              src="{{item.previewDisplayImages.origin}}"
+              mode="aspectFit"
+              lazy-load="true"
+              data-work-id="{{item.id}}"
+              data-view-type="origin"
+              binderror="handleWorkPreviewImageError"
             ></image>
             <view wx:else class="preview-placeholder">原图</view>
             <view class="preview-label">原图</view>
           </view>
           <view
             class="preview-block preview-tone-{{item.previewTones.ai}}"
+            style="{{item.previewDisplayImages.ai ? 'background:#FFFFFF;' : ''}}"
             data-work-id="{{item.id}}"
             data-view-type="ai"
             bindtap="handleOpenWorkPreview"
           >
             <image
-              wx:if="{{item.previewImages.ai}}"
-              class="preview-image"
-              src="{{item.previewImages.ai}}"
-              mode="aspectFill"
+              wx:if="{{item.previewDisplayImages.ai}}"
+              class="preview-image {{item.style.indexOf('Q版') === -1 ? 'preview-image-pixel' : ''}}"
+              src="{{item.previewDisplayImages.ai}}"
+              mode="aspectFit"
+              lazy-load="true"
+              data-work-id="{{item.id}}"
+              data-view-type="ai"
+              binderror="handleWorkPreviewImageError"
             ></image>
-            <block wx:if="{{!item.previewImages.ai}}">
+            <block wx:if="{{!item.previewDisplayImages.ai}}">
               <view wx:if="{{item.isGenerating}}" class="preview-generating">
                 <text class="preview-generating-icon">⌛</text>
-                <text class="preview-generating-title">AI图纸生成中</text>
+                <text class="preview-generating-title">{{item.style.indexOf('Q版') !== -1 ? 'Q版生成中' : 'AI图纸生成中'}}</text>
                 <text class="preview-generating-sub">约30秒至1分钟，请稍候</text>
               </view>
-              <view wx:else class="preview-placeholder">AI图</view>
+              <view wx:else class="preview-placeholder">{{item.style.indexOf('Q版') !== -1 ? 'Q版图' : 'AI图'}}</view>
             </block>
-            <view class="preview-label">AI图</view>
+            <view class="preview-label">{{item.style.indexOf('Q版') !== -1 ? 'Q版图' : 'AI图'}}</view>
           </view>
           <view
             class="preview-block preview-block-grid preview-tone-{{item.previewTones.grid}}"
+            style="{{item.previewDisplayImages.grid ? 'background:#FFFFFF;' : ''}}"
             data-work-id="{{item.id}}"
             data-view-type="grid"
             bindtap="handleOpenWorkPreview"
           >
             <image
-              wx:if="{{item.previewImages.grid}}"
-              class="preview-image preview-image-grid"
-              src="{{item.previewImages.grid}}"
+              wx:if="{{item.previewDisplayImages.grid}}"
+              class="preview-image preview-image-grid preview-image-pixel"
+              src="{{item.previewDisplayImages.grid}}"
               mode="aspectFit"
+              lazy-load="true"
+              data-work-id="{{item.id}}"
+              data-view-type="grid"
+              binderror="handleWorkPreviewImageError"
             ></image>
-            <block wx:if="{{!item.previewImages.grid}}">
+            <block wx:if="{{!item.previewDisplayImages.grid}}">
               <view wx:if="{{item.isGenerating}}" class="preview-generating">
                 <text class="preview-generating-icon">⌛</text>
                 <text class="preview-generating-title">AI图纸生成中</text>
@@ -70,9 +109,11 @@
             </block>
             <view class="preview-label">图纸</view>
           </view>
+          </block>
         </view>
 
         <view class="work-meta">{{item.size}} · {{item.style}}</view>
+        <view class="creator-reason" wx:if="{{item.isFailed && item.failReason}}">{{item.failReason}}</view>
         <view class="work-stats">
           <text>浏览 {{item.views}}</text>
           <text>收藏 {{item.saves}}</text>
@@ -115,7 +156,12 @@
         <text class="modal-close" bindtap="handleCloseWorkPreview">×</text>
       </view>
       <view class="preview-modal-label">{{previewLabel}}</view>
-      <image wx:if="{{previewImagePath}}" class="preview-large-image" src="{{previewImagePath}}" mode="aspectFit"></image>
+      <image
+        wx:if="{{previewImagePath}}"
+        class="preview-large-image {{previewIsPixel ? 'is-pixel' : ''}}"
+        src="{{previewImagePath}}"
+        mode="aspectFit"
+      ></image>
       <view wx:else class="preview-large preview-tone-{{previewTone}}"></view>
     </view>
   </view>
@@ -180,7 +226,7 @@
                 class="seg-item {{selectedStyleMode === 'cartoon' ? 'is-active' : ''}}"
                 data-mode="cartoon"
                 bindtap="handleSelectStyleMode"
-              >卡通像素</view>
+              >卡通像素（Q版）</view>
               <view
                 class="seg-item {{selectedStyleMode === 'fine' ? 'is-active' : ''}}"
                 data-mode="fine"
@@ -188,7 +234,7 @@
               >精致像素</view>
             </view>
             <view class="setting-note">{{styleHintText}}</view>
-            <view class="setting-mini-note">当前版本中，卡通像素与精致像素都会先按精致像素输出。</view>
+            <view class="setting-mini-note">精致像素：沿用当前算法。卡通像素（Q版）：先生成Q版中间稿，再转拼豆图纸。</view>
           </view>
 
           <view class="setting-block">

@@ -4,6 +4,7 @@ const { unpackIndexGrid } = require("../../utils/grid-pack");
 const STORAGE_KEY = "bead_work_library_v1";
 const BACKUP_STORAGE_KEY = "bead_work_library_backup_v1";
 const LEGACY_STORAGE_KEY = "bead_work_library_v0";
+const PUBLISHED_PAPER_STORAGE_KEY = "bead_published_paper_library_v1";
 
 const MAX_CANVAS_EDGE = 2000;
 const AXIS_RING_CELLS = 1;
@@ -158,14 +159,54 @@ Page({
 
     return Array.isArray(cached) ? cached : [];
   },
+  readPublishedPaperLibrary() {
+    try {
+      const stored = wx.getStorageSync(PUBLISHED_PAPER_STORAGE_KEY);
+      return Array.isArray(stored) ? stored : [];
+    } catch (error) {
+      console.warn("read published paper library failed", error);
+      return [];
+    }
+  },
+  resolveWorkRecord(workId) {
+    const safeId = String(workId || "");
+    if (!safeId) return null;
+    const workLibrary = this.readWorkLibrary();
+    const directWork = workLibrary.find((item) => item && item.id === safeId);
+    if (directWork) return directWork;
+
+    const publishedList = this.readPublishedPaperLibrary();
+    const published = publishedList.find((item) => item && (
+      String(item.id || "") === safeId
+      || String(item.workId || "") === safeId
+      || String(item.sourceWorkId || "") === safeId
+    ));
+    if (!published) return null;
+
+    const linkedWorkId = String(published.workId || published.sourceWorkId || "");
+    if (linkedWorkId) {
+      const linkedWork = workLibrary.find((item) => item && item.id === linkedWorkId);
+      if (linkedWork) return linkedWork;
+    }
+
+    return {
+      id: linkedWorkId || safeId,
+      title: published.title || "拼豆模式",
+      size: published.size || "",
+      editorData: published.editorData && typeof published.editorData === "object"
+        ? {
+          ...published.editorData
+        }
+        : null
+    };
+  },
   loadWork(workId) {
     if (!workId) {
       this.setData({ hasGrid: false });
       wx.showToast({ title: "作品不存在", icon: "none" });
       return;
     }
-    const workLibrary = this.readWorkLibrary();
-    const work = workLibrary.find((item) => item && item.id === workId);
+    const work = this.resolveWorkRecord(workId);
     if (!work) {
       this.setData({ hasGrid: false });
       wx.showToast({ title: "作品不存在", icon: "none" });

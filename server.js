@@ -1,10 +1,15 @@
 const express = require("express");
+const crypto = require("crypto");
+const fsSync = require("fs");
+const fs = require("fs/promises");
 const multer = require("multer");
+const path = require("path");
 const sharp = require("sharp");
 const PDFDocument = require("pdfkit");
 const { PALETTES } = require("./lib/palettes");
 
 const app = express();
+app.set("trust proxy", true);
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 8 * 1024 * 1024 }
@@ -13,6 +18,33 @@ const upload = multer({
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
+
+function loadLocalEnvFile(filePath) {
+  let raw = "";
+  try {
+    raw = fsSync.readFileSync(filePath, "utf8");
+  } catch (_error) {
+    return;
+  }
+  raw.split(/\r?\n/).forEach((line) => {
+    const trimmed = String(line || "").trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+    const index = trimmed.indexOf("=");
+    if (index <= 0) return;
+    const key = trimmed.slice(0, index).trim();
+    if (!key || process.env[key] !== undefined) return;
+    let value = trimmed.slice(index + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\""))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    process.env[key] = value;
+  });
+}
+
+loadLocalEnvFile(path.join(__dirname, ".env.local"));
 
 const GRID_SIZES = [52, 104];
 const DEFAULT_GRID_SIZE = GRID_SIZES[0];
@@ -40,11 +72,481 @@ const MAPPING_STRATEGIES = {
   CLUSTER_FIRST: "cluster-first"
 };
 const DEFAULT_MAPPING_STRATEGY = MAPPING_STRATEGIES.DIRECT;
+const DEFAULT_FINE_SIMILARITY_THRESHOLD = 24;
+const GENERATED_ASSET_DIR = path.join(__dirname, "public", "generated");
+const DEFAULT_CARTOONIZE_LONG_EDGE = 960;
+const MAX_CARTOONIZE_LONG_EDGE = 1280;
+const MIN_CARTOONIZE_LONG_EDGE = 320;
+const CARTOON_EDGE_RGBA = { r: 42, g: 48, b: 62 };
+const DOUBAO_SEEDREAM_MODEL = process.env.DOUBAO_SEEDREAM_MODEL || "doubao-seedream-4-5";
+const DOUBAO_SEEDREAM_API_URL = String(
+  process.env.DOUBAO_SEEDREAM_API_URL
+  || "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+).trim();
+const DOUBAO_SEEDREAM_API_KEY = String(
+  process.env.DOUBAO_SEEDREAM_API_KEY
+  || process.env.ARK_API_KEY
+  || ""
+).trim();
+const DOUBAO_SEEDREAM_AUTH_SCHEME = String(process.env.DOUBAO_SEEDREAM_AUTH_SCHEME || "Bearer").trim() || "Bearer";
+const DOUBAO_SEEDREAM_TIMEOUT_MS = clampNumber(process.env.DOUBAO_SEEDREAM_TIMEOUT_MS, 5000, 180000, 90000);
 
 function clampNumber(value, min, max, fallback) {
   const number = Number.parseInt(value, 10);
   if (Number.isNaN(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+function clampValue(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function resolveDefaultFineSimilarityThreshold(maxEdgeSize) {
+  const safeEdge = Math.max(1, Math.floor(Number(maxEdgeSize) || 0));
+  if (safeEdge > 0 && safeEdge <= 40) return 16;
+  if (safeEdge > 0 && safeEdge <= 52) return 20;
+  return DEFAULT_FINE_SIMILARITY_THRESHOLD;
+}
+
+function toPositiveInt(value, fallback = 0) {
+  const number = Number.parseInt(value, 10);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return number;
+}
+
+async function ensureGeneratedAssetDir() {
+  await fs.mkdir(GENERATED_ASSET_DIR, { recursive: true });
+}
+
+function buildGeneratedFileName(prefix = "generated") {
+  return `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}.png`;
+}
+
+function buildPublicAssetUrl(req, fileName) {
+  const protocol = (req.get("x-forwarded-proto") || req.protocol || "http").split(",")[0].trim();
+  const host = req.get("host");
+  return `${protocol}://${host}/generated/${encodeURIComponent(fileName)}`;
+}
+
+function buildDoubaoSeedreamConfig() {
+  return {
+    enabled: Boolean(DOUBAO_SEEDREAM_API_URL && DOUBAO_SEEDREAM_API_KEY),
+    url: DOUBAO_SEEDREAM_API_URL,
+    apiKey: DOUBAO_SEEDREAM_API_KEY,
+    model: DOUBAO_SEEDREAM_MODEL,
+    authScheme: DOUBAO_SEEDREAM_AUTH_SCHEME,
+    timeoutMs: DOUBAO_SEEDREAM_TIMEOUT_MS
+  };
+}
+
+function isProbablyBase64Image(value) {
+  if (typeof value !== "string") return false;
+  const compact = value.replace(/\s+/g, "");
+  return compact.length >= 128 && compact.length % 4 === 0 && /^[A-Za-z0-9+/=]+$/.test(compact);
+}
+
+function stripDataUrlPrefix(value) {
+  if (typeof value !== "string") return "";
+  const source = value.trim();
+  const matched = source.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  return matched ? matched[2] : source;
+}
+
+function collectImageCandidates(payload) {
+  const queue = [payload];
+  const visited = new Set();
+  const candidates = [];
+  const pushValue = (value) => {
+    if (!value) return;
+    if (typeof value === "string") {
+      const source = value.trim();
+      if (!source) return;
+      if (/^https?:\/\//i.test(source) || /^data:image\//i.test(source) || isProbablyBase64Image(source)) {
+        candidates.push(source);
+      }
+      return;
+    }
+    if (Buffer.isBuffer(value)) {
+      candidates.push(value);
+      return;
+    }
+    if (typeof value === "object") {
+      if (visited.has(value)) return;
+      visited.add(value);
+      queue.push(value);
+    }
+  };
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current) continue;
+    if (Array.isArray(current)) {
+      current.forEach((item) => pushValue(item));
+      continue;
+    }
+    if (Buffer.isBuffer(current)) {
+      candidates.push(current);
+      continue;
+    }
+    if (typeof current !== "object") {
+      pushValue(current);
+      continue;
+    }
+
+    [
+      "url",
+      "imageUrl",
+      "image_url",
+      "imagePath",
+      "outputImagePath",
+      "stylizedImagePath",
+      "result",
+      "b64_json",
+      "b64",
+      "base64",
+      "image_base64",
+      "imageBase64"
+    ].forEach((key) => {
+      if (key in current) pushValue(current[key]);
+    });
+
+    Object.keys(current).forEach((key) => {
+      const value = current[key];
+      if (Array.isArray(value) || (value && typeof value === "object")) {
+        pushValue(value);
+      }
+    });
+  }
+
+  return candidates;
+}
+
+async function resolveProviderImageBuffer(candidate) {
+  if (!candidate) return null;
+  if (Buffer.isBuffer(candidate)) return candidate;
+  if (typeof candidate !== "string") return null;
+  const source = candidate.trim();
+  if (!source) return null;
+  if (/^data:image\//i.test(source) || isProbablyBase64Image(source)) {
+    return Buffer.from(stripDataUrlPrefix(source), "base64");
+  }
+  if (/^https?:\/\//i.test(source)) {
+    const response = await fetch(source);
+    if (!response.ok) {
+      throw new Error(`provider-image-download-failed:${response.status}`);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+  return null;
+}
+
+async function persistGeneratedImageBuffer(req, buffer, prefix = "qv") {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    throw new Error("empty-generated-image-buffer");
+  }
+  await ensureGeneratedAssetDir();
+  const fileName = buildGeneratedFileName(prefix);
+  const outputPath = path.join(GENERATED_ASSET_DIR, fileName);
+  await fs.writeFile(outputPath, buffer);
+  const imageUrl = buildPublicAssetUrl(req, fileName);
+  return {
+    fileName,
+    outputPath,
+    imageUrl
+  };
+}
+
+function createRequestTimeoutSignal(timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`request-timeout:${timeoutMs}`));
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+    }
+  };
+}
+
+function resolveCartoonizeLongEdge(body = {}) {
+  const maxEdge = clampNumber(body.maxEdge, 10, 200, 52);
+  const derived = clampValue(maxEdge * 18, 560, MAX_CARTOONIZE_LONG_EDGE);
+  return clampNumber(
+    body.longEdge || body.targetLongEdge || body.outputLongEdge,
+    MIN_CARTOONIZE_LONG_EDGE,
+    MAX_CARTOONIZE_LONG_EDGE,
+    Math.max(DEFAULT_CARTOONIZE_LONG_EDGE, derived)
+  );
+}
+
+function buildEdgeOverlay(maskData, width, height) {
+  const output = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < width * height; i += 1) {
+    const strength = Number(maskData[i]) || 0;
+    const alpha = strength <= 8
+      ? 0
+      : Math.min(160, Math.round(strength * 0.68));
+    const offset = i * 4;
+    output[offset] = CARTOON_EDGE_RGBA.r;
+    output[offset + 1] = CARTOON_EDGE_RGBA.g;
+    output[offset + 2] = CARTOON_EDGE_RGBA.b;
+    output[offset + 3] = alpha;
+  }
+  return output;
+}
+
+async function createCartoonizedImageBuffer(inputBuffer, options = {}) {
+  const targetLongEdge = clampValue(
+    toPositiveInt(options.longEdge, DEFAULT_CARTOONIZE_LONG_EDGE),
+    MIN_CARTOONIZE_LONG_EDGE,
+    MAX_CARTOONIZE_LONG_EDGE
+  );
+
+  const basePipeline = sharp(inputBuffer, { failOn: "none" })
+    .rotate()
+    .flatten({ background: "#FFFFFF" });
+  const metadata = await basePipeline.metadata();
+  const width = Math.max(1, metadata.width || targetLongEdge);
+  const height = Math.max(1, metadata.height || targetLongEdge);
+  const resizeOptions = width >= height
+    ? { width: targetLongEdge }
+    : { height: targetLongEdge };
+
+  const preparedBuffer = await sharp(inputBuffer, { failOn: "none" })
+    .rotate()
+    .flatten({ background: "#FFFFFF" })
+    .resize({
+      ...resizeOptions,
+      fit: "inside",
+      withoutEnlargement: false
+    })
+    .normalise()
+    .modulate({
+      brightness: 1.03,
+      saturation: 1.15
+    })
+    .gamma(1.05)
+    .png()
+    .toBuffer();
+
+  const preparedMeta = await sharp(preparedBuffer).metadata();
+  const outputWidth = Math.max(1, preparedMeta.width || targetLongEdge);
+  const outputHeight = Math.max(1, preparedMeta.height || targetLongEdge);
+  const simplifiedLongEdge = clampValue(
+    Math.round(Math.max(outputWidth, outputHeight) * 0.34),
+    140,
+    420
+  );
+  const simplifiedResize = outputWidth >= outputHeight
+    ? { width: simplifiedLongEdge }
+    : { height: simplifiedLongEdge };
+
+  const simplifiedBuffer = await sharp(preparedBuffer)
+    .median(2)
+    .blur(0.55)
+    .resize({
+      ...simplifiedResize,
+      fit: "inside",
+      kernel: sharp.kernel.cubic
+    })
+    .resize({
+      width: outputWidth,
+      height: outputHeight,
+      fit: "fill",
+      kernel: sharp.kernel.nearest
+    })
+    .modulate({
+      brightness: 1.01,
+      saturation: 1.08
+    })
+    .sharpen({
+      sigma: 0.8,
+      m1: 0.8,
+      m2: 1.4
+    })
+    .png({
+      palette: true,
+      colors: 28,
+      effort: 8
+    })
+    .toBuffer();
+
+  const edgeMask = await sharp(preparedBuffer)
+    .greyscale()
+    .linear(1.22, -10)
+    .convolve({
+      width: 3,
+      height: 3,
+      kernel: [
+        -1, -1, -1,
+        -1, 8, -1,
+        -1, -1, -1
+      ]
+    })
+    .normalise()
+    .threshold(18, { grayscale: true })
+    .blur(0.35)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const overlay = buildEdgeOverlay(edgeMask.data, outputWidth, outputHeight);
+
+  return sharp(simplifiedBuffer)
+    .composite([
+      {
+        input: overlay,
+        raw: {
+          width: outputWidth,
+          height: outputHeight,
+          channels: 4
+        },
+        blend: "multiply"
+      }
+    ])
+    .modulate({
+      brightness: 1.01,
+      saturation: 1.06
+    })
+    .png({
+      palette: true,
+      colors: 32,
+      effort: 9
+    })
+    .toBuffer();
+}
+
+function buildDoubaoSeedreamPrompt(body = {}) {
+  const prompt = String(body.prompt || "").trim();
+  if (prompt) return prompt;
+  const workName = String(body.workName || body.title || "人物").trim().slice(0, 24) || "人物";
+  return [
+    "请将输入图片重绘为干净、简洁、可爱的Q版人物插画。",
+    "保留人物辨识度，尤其是发型、脸型、眼睛、服装主特征。",
+    "保持完整构图和人物数量，不要裁掉头部、手部、配饰、麦克风和边缘元素。",
+    "输出为非像素风的日系Q版插画，线条干净，配色清爽，背景简洁或留白。",
+    "减少细碎头发、复杂褶皱、杂乱阴影和高频纹理，但不要丢失关键特征。",
+    "不要生成像素画、网格、马赛克、拼豆格子。",
+    `作品名：${workName}。`
+  ].join(" ");
+}
+
+async function generateQVersionWithDoubaoSeedream(req) {
+  const config = buildDoubaoSeedreamConfig();
+  if (!config.enabled) {
+    return null;
+  }
+
+  const longEdge = resolveCartoonizeLongEdge(req.body || {});
+  const prompt = buildDoubaoSeedreamPrompt(req.body || {});
+  const negativePrompt = String(
+    req.body && (
+      req.body.negative_prompt
+      || req.body.negativePrompt
+      || ""
+    )
+  ).trim();
+  const imageDataUrl = `data:${req.file.mimetype || "image/png"};base64,${req.file.buffer.toString("base64")}`;
+  const requestedSize = String(req.body.size || "").trim().toUpperCase();
+  const officialSize = requestedSize || (longEdge >= 144 ? "4K" : "2K");
+  const body = {
+    model: config.model,
+    prompt,
+    image: imageDataUrl,
+    sequential_image_generation: "disabled",
+    response_format: "url",
+    size: officialSize,
+    stream: false,
+    watermark: true
+  };
+  if (negativePrompt) {
+    body.negative_prompt = negativePrompt;
+  }
+
+  console.log("[q-cartoonize] Seedream request", {
+    model: config.model,
+    size: officialSize,
+    promptPreview: prompt.slice(0, 120),
+    hasNegativePrompt: Boolean(negativePrompt),
+    imageMime: req.file && req.file.mimetype ? req.file.mimetype : "",
+    imageBytes: req.file && req.file.buffer ? req.file.buffer.length : 0
+  });
+
+  const timeout = createRequestTimeoutSignal(config.timeoutMs);
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `${config.authScheme} ${config.apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: timeout.signal
+    });
+
+    const rawText = await response.text();
+    let payload = null;
+    try {
+      payload = rawText ? JSON.parse(rawText) : null;
+    } catch (_error) {
+      payload = { rawText };
+    }
+
+    if (!response.ok) {
+      const message = String(
+        payload && (
+          payload.message
+          || payload.error
+          || payload.errMsg
+          || payload.code_msg
+          || payload.rawText
+        )
+        || `http ${response.status}`
+      );
+      throw new Error(`doubao-seedream-http:${message}`);
+    }
+
+    console.log("[q-cartoonize] Seedream response ok", {
+      model: config.model,
+      payloadKeys: payload && typeof payload === "object" ? Object.keys(payload).slice(0, 20) : []
+    });
+
+    const candidates = collectImageCandidates(payload);
+    if (!candidates.length) {
+      throw new Error("doubao-seedream-empty-image");
+    }
+
+    let imageBuffer = null;
+    for (let i = 0; i < candidates.length; i += 1) {
+      try {
+        imageBuffer = await resolveProviderImageBuffer(candidates[i]);
+      } catch (error) {
+        imageBuffer = null;
+      }
+      if (imageBuffer && imageBuffer.length) break;
+    }
+    if (!imageBuffer || !imageBuffer.length) {
+      throw new Error("doubao-seedream-image-resolve-failed");
+    }
+
+    const persisted = await persistGeneratedImageBuffer(req, imageBuffer, "qv");
+    console.log("[q-cartoonize] Seedream image persisted", {
+      provider: "doubao-seedream-4.5",
+      imageUrl: persisted.imageUrl
+    });
+    return {
+      ok: true,
+      provider: "doubao-seedream-4.5",
+      imagePath: persisted.imageUrl,
+      stylizedImagePath: persisted.imageUrl,
+      outputImagePath: persisted.imageUrl,
+      longEdge,
+      prompt
+    };
+  } finally {
+    timeout.clear();
+  }
 }
 
 function hexToRgb(hex) {
@@ -693,7 +1195,7 @@ async function buildSamplingBuffer(buffer, { gridSize, maxEdgeSize, samplingMode
     .toBuffer({ resolveWithObject: true });
 }
 
-function sampleRepresentativeColors(raw, gridSize, samplingMode) {
+function sampleRepresentativeColors(raw, gridSize, samplingMode, detailEdgeSize = gridSize) {
   const width = raw.info.width;
   const cellSize = Math.floor(width / gridSize);
   const reps = [];
@@ -701,6 +1203,7 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
   const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
   const quantStep = 12;
   const quant = (value) => clamp(Math.round(value / quantStep) * quantStep, 0, 255);
+  const smallTargetBoost = clampValue((40 - Math.max(1, Number(detailEdgeSize) || gridSize)) / 18, 0, 1);
 
   for (let y = 0; y < gridSize; y += 1) {
     const yStart = y * cellSize;
@@ -716,11 +1219,8 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
       const colorCounts = new Map();
       let minLum = 255;
       let maxLum = 0;
-      let darkCount = 0;
-      let darkR = 0;
-      let darkG = 0;
-      let darkB = 0;
-
+      let darkestColor = null;
+      let brightestColor = null;
       for (let py = yStart; py < yEnd; py += 1) {
         for (let px = xStart; px < xEnd; px += 1) {
           const idx = (py * width + px) * 4;
@@ -732,15 +1232,13 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
           const b = raw.data[idx + 2];
           count += 1;
           const lum = toLum(r, g, b);
-          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-          if (lum < minLum) minLum = lum;
-          if (lum > maxLum) maxLum = lum;
-          // Protect dark thin outlines (e.g. sleeve/hat/collar linework) when edge size is small.
-          if (lum <= 80 && chroma <= 100) {
-            darkCount += 1;
-            darkR += r;
-            darkG += g;
-            darkB += b;
+          if (lum < minLum) {
+            minLum = lum;
+            darkestColor = { r, g, b, lum };
+          }
+          if (lum > maxLum) {
+            maxLum = lum;
+            brightestColor = { r, g, b, lum };
           }
 
           if (samplingMode === SAMPLE_MODES.MODE) {
@@ -797,18 +1295,43 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
         repB = sumB / count;
       }
 
-      const contrast = maxLum - minLum;
-      const darkCoverage = darkCount / count;
-      if (darkCount > 0 && contrast >= 18 && darkCoverage >= 0.015) {
-        const lineR = darkR / darkCount;
-        const lineG = darkG / darkCount;
-        const lineB = darkB / darkCount;
-        const coverageScore = clamp((darkCoverage - 0.012) / 0.22, 0, 1);
-        const contrastScore = clamp((contrast - 16) / 80, 0, 1);
-        const keep = clamp(0.12 + 0.34 * coverageScore + 0.24 * contrastScore, 0.1, 0.55);
-        repR = repR * (1 - keep) + lineR * keep;
-        repG = repG * (1 - keep) + lineG * keep;
-        repB = repB * (1 - keep) + lineB * keep;
+      if (smallTargetBoost > 0 && darkestColor && brightestColor) {
+        const repLum = toLum(repR, repG, repB);
+        const contrast = maxLum - minLum;
+        const centerX = clamp(Math.floor((xStart + Math.max(xStart, xEnd - 1)) / 2), 0, width - 1);
+        const centerY = clamp(Math.floor((yStart + Math.max(yStart, yEnd - 1)) / 2), 0, raw.info.height - 1);
+        const centerOffset = (centerY * width + centerX) * 4;
+        const centerColor = {
+          r: raw.data[centerOffset],
+          g: raw.data[centerOffset + 1],
+          b: raw.data[centerOffset + 2]
+        };
+        const centerLum = toLum(centerColor.r, centerColor.g, centerColor.b);
+        const centerDelta = Math.abs(centerLum - repLum);
+        if (contrast >= 18 && centerDelta >= 10) {
+          const focus = clampValue(
+            0.1 + smallTargetBoost * 0.12 + ((centerDelta - 10) / 42) * 0.12 + ((contrast - 18) / 48) * 0.08,
+            0.08,
+            0.32
+          );
+          repR = repR * (1 - focus) + centerColor.r * focus;
+          repG = repG * (1 - focus) + centerColor.g * focus;
+          repB = repB * (1 - focus) + centerColor.b * focus;
+        } else if (contrast >= 22) {
+          const darkGap = repLum - darkestColor.lum;
+          const lightGap = brightestColor.lum - repLum;
+          if (lightGap >= 16) {
+            const focus = clampValue(0.06 + smallTargetBoost * 0.1 + ((lightGap - 16) / 40) * 0.08, 0.05, 0.2);
+            repR = repR * (1 - focus) + brightestColor.r * focus;
+            repG = repG * (1 - focus) + brightestColor.g * focus;
+            repB = repB * (1 - focus) + brightestColor.b * focus;
+          } else if (darkGap >= 16) {
+            const focus = clampValue(0.06 + smallTargetBoost * 0.1 + ((darkGap - 16) / 40) * 0.08, 0.05, 0.2);
+            repR = repR * (1 - focus) + darkestColor.r * focus;
+            repG = repG * (1 - focus) + darkestColor.g * focus;
+            repB = repB * (1 - focus) + darkestColor.b * focus;
+          }
+        }
       }
 
       reps.push({
@@ -820,6 +1343,97 @@ function sampleRepresentativeColors(raw, gridSize, samplingMode) {
   }
 
   return reps;
+}
+
+function enhanceRepresentativeColors(representativeColors, gridSize, detailEdgeSize = gridSize) {
+  if (!Array.isArray(representativeColors) || !representativeColors.length) {
+    return representativeColors;
+  }
+  const safeGridSize = Math.max(1, Math.floor(gridSize) || 1);
+  const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+  const safeDetailEdge = Math.max(1, Math.floor(Number(detailEdgeSize) || safeGridSize));
+  const smallGridBoost = clampValue((72 - safeDetailEdge) / 72, 0, 1);
+  const baseSharpen = 0.14 + smallGridBoost * 0.1;
+  const extraSharpen = 0.22 + smallGridBoost * 0.12;
+  const contrastBoost = 1.04 + smallGridBoost * 0.06;
+  const saturationBoost = 1.03 + smallGridBoost * 0.04;
+
+  return representativeColors.map((color, index) => {
+    if (!color) return null;
+    const x = index % safeGridSize;
+    const y = Math.floor(index / safeGridSize);
+    const baseR = Number(color.r) || 0;
+    const baseG = Number(color.g) || 0;
+    const baseB = Number(color.b) || 0;
+    const baseLum = toLum(baseR, baseG, baseB);
+    const baseChroma = Math.max(baseR, baseG, baseB) - Math.min(baseR, baseG, baseB);
+
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    let sumWeight = 0;
+    let nearWhiteWeight = 0;
+
+    for (let dy = -1; dy <= 1; dy += 1) {
+      const ny = y + dy;
+      if (ny < 0 || ny >= safeGridSize) continue;
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const nx = x + dx;
+        if (nx < 0 || nx >= safeGridSize) continue;
+        if (dx === 0 && dy === 0) continue;
+        const neighbor = representativeColors[ny * safeGridSize + nx];
+        if (!neighbor) continue;
+        const weight = dx === 0 || dy === 0 ? 1 : 0.72;
+        const nr = Number(neighbor.r) || 0;
+        const ng = Number(neighbor.g) || 0;
+        const nb = Number(neighbor.b) || 0;
+        sumR += nr * weight;
+        sumG += ng * weight;
+        sumB += nb * weight;
+        sumWeight += weight;
+        const nLum = toLum(nr, ng, nb);
+        const nChroma = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
+        if (nLum >= 242 && nChroma <= 20) nearWhiteWeight += weight;
+      }
+    }
+
+    if (sumWeight <= 0) return color;
+
+    const avgR = sumR / sumWeight;
+    const avgG = sumG / sumWeight;
+    const avgB = sumB / sumWeight;
+    const avgLum = toLum(avgR, avgG, avgB);
+    const lumContrast = Math.abs(baseLum - avgLum);
+    const detailScore = clampValue((lumContrast - 5) / 34, 0, 1);
+    if (baseLum >= 243 && avgLum >= 243 && lumContrast <= 4) {
+      return { r: 255, g: 255, b: 255 };
+    }
+    if (nearWhiteWeight >= sumWeight * 0.78 && baseLum >= 236 && detailScore < 0.2) {
+      return { r: 255, g: 255, b: 255 };
+    }
+
+    const sharpen = clampValue(baseSharpen + detailScore * extraSharpen, 0.1, 0.46);
+    let nextR = baseR + (baseR - avgR) * sharpen;
+    let nextG = baseG + (baseG - avgG) * sharpen;
+    let nextB = baseB + (baseB - avgB) * sharpen;
+
+    const localContrastGain = 1 + detailScore * (contrastBoost - 1);
+    nextR = (nextR - 128) * localContrastGain + 128;
+    nextG = (nextG - 128) * localContrastGain + 128;
+    nextB = (nextB - 128) * localContrastGain + 128;
+
+    const nextLum = toLum(nextR, nextG, nextB);
+    const satGain = saturationBoost + (baseChroma <= 42 ? 0.03 : 0);
+    nextR = nextLum + (nextR - nextLum) * satGain;
+    nextG = nextLum + (nextG - nextLum) * satGain;
+    nextB = nextLum + (nextB - nextLum) * satGain;
+
+    return {
+      r: clampValue(nextR, 0, 255),
+      g: clampValue(nextG, 0, 255),
+      b: clampValue(nextB, 0, 255)
+    };
+  });
 }
 
 function enrichPaletteWithLab(paletteColors) {
@@ -1399,7 +2013,7 @@ async function generateGridFromImage(buffer, options) {
   const similarityThresholdRaw = Number(options.similarityThreshold);
   const similarityThreshold = Number.isFinite(similarityThresholdRaw)
     ? Math.max(0, Math.min(120, similarityThresholdRaw))
-    : 30;
+    : resolveDefaultFineSimilarityThreshold(maxEdgeSize);
   const samplingMode = options.samplingMode === SAMPLE_MODES.AVERAGE
     ? SAMPLE_MODES.AVERAGE
     : SAMPLE_MODES.MODE;
@@ -1416,7 +2030,11 @@ async function generateGridFromImage(buffer, options) {
     samplingMode,
     preprocessMode
   });
-  const representativeColors = sampleRepresentativeColors(samplingRaw, gridSize, samplingMode);
+  const representativeColors = enhanceRepresentativeColors(
+    sampleRepresentativeColors(samplingRaw, gridSize, samplingMode, maxEdgeSize),
+    gridSize,
+    maxEdgeSize
+  );
 
   if (!options.palette) {
     const validReps = representativeColors.filter(Boolean);
@@ -2275,6 +2893,60 @@ app.post("/api/export-pdf", async (req, res) => {
   }
 });
 
+app.post("/api/q-cartoonize", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "缺少图片文件。" });
+    }
+
+    console.log("[q-cartoonize] incoming request", {
+      fileName: req.file.originalname || "",
+      mime: req.file.mimetype || "",
+      bytes: req.file.buffer ? req.file.buffer.length : 0,
+      workName: String(req.body && req.body.workName || ""),
+      maxEdge: String(req.body && req.body.maxEdge || ""),
+      allowLocalFallback: String(req.body && req.body.allowLocalFallback || "true")
+    });
+
+    const allowLocalFallback = String(req.body && req.body.allowLocalFallback || "true") !== "false";
+    try {
+      const seedreamResult = await generateQVersionWithDoubaoSeedream(req);
+      if (seedreamResult) {
+        console.log("[q-cartoonize] completed with remote provider", {
+          provider: seedreamResult.provider,
+          imagePath: seedreamResult.imagePath
+        });
+        return res.json(seedreamResult);
+      }
+    } catch (providerError) {
+      console.error("[q-cartoonize] 豆包 Seedream 4.5 调用失败，准备回退本地算法:", providerError);
+      if (!allowLocalFallback) {
+        throw providerError;
+      }
+    }
+
+    const longEdge = resolveCartoonizeLongEdge(req.body || {});
+    const outputBuffer = await createCartoonizedImageBuffer(req.file.buffer, { longEdge });
+    const persisted = await persistGeneratedImageBuffer(req, outputBuffer, "qv");
+    console.log("[q-cartoonize] completed with local fallback", {
+      provider: "local-cartoonizer",
+      imagePath: persisted.imageUrl
+    });
+    return res.json({
+      ok: true,
+      provider: "local-cartoonizer",
+      imagePath: persisted.imageUrl,
+      stylizedImagePath: persisted.imageUrl,
+      outputImagePath: persisted.imageUrl,
+      longEdge,
+      fallback: true
+    });
+  } catch (error) {
+    console.error("[q-cartoonize] 生成失败:", error);
+    res.status(500).json({ error: "Q版重绘失败。" });
+  }
+});
+
 app.post("/api/generate", upload.single("image"), async (req, res) => {
   try {
     const output = req.query.format || req.body.output || "json";
@@ -2330,7 +3002,7 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
     );
     const similarityThreshold = Number.isFinite(similarityThresholdRaw)
       ? Math.max(4, Math.min(80, similarityThresholdRaw))
-      : 30;
+      : resolveDefaultFineSimilarityThreshold(maxEdgeSize);
 
     const palette = pickPalette(paletteId);
 

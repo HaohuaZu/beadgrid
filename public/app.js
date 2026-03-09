@@ -1,13 +1,24 @@
 const imageInput = document.getElementById("imageInput");
+const squareView = document.getElementById("squareView");
+const createView = document.getElementById("createView");
+const profileView = document.getElementById("profileView");
+const createWorksList = document.getElementById("createWorksList");
+const siteTabButtons = Array.from(document.querySelectorAll(".site-tab"));
 const uploadTriggerButton = document.getElementById("uploadTrigger");
 const uploadFilenameEl = document.getElementById("uploadFilename");
+const workNameInput = document.getElementById("workName");
 const gridSizeSelect = document.getElementById("gridSize");
 const maxEdgeSizeRangeInput = document.getElementById("maxEdgeSizeRange");
 const maxEdgeSizeInput = document.getElementById("maxEdgeSize");
 const paletteSelect = document.getElementById("palette");
 const samplingModeSelect = document.getElementById("samplingMode");
+const styleModeSelect = document.getElementById("styleMode");
+const styleModeHintEl = document.getElementById("styleModeHint");
 const optimizeInput = document.getElementById("optimize");
 const showCodesInput = document.getElementById("showCodes");
+const generateNowButton = document.getElementById("generateNowButton");
+const regenerateButton = document.getElementById("regenerateButton");
+const clearWorkspaceButton = document.getElementById("clearWorkspaceButton");
 
 const patternViewport = document.getElementById("patternViewport");
 const patternCanvas = document.getElementById("patternCanvas");
@@ -19,6 +30,19 @@ const patternCoordBadge = document.getElementById("patternCoordBadge");
 const previewEmptyState = document.getElementById("previewEmptyState");
 const previewUploadTriggerButton = document.getElementById("previewUploadTrigger");
 const previewReuploadTriggerButton = document.getElementById("previewReuploadTrigger");
+const originPreviewCard = document.getElementById("originPreviewCard");
+const originPreviewImage = document.getElementById("originPreviewImage");
+const originPreviewPlaceholder = document.getElementById("originPreviewPlaceholder");
+const originPreviewMeta = document.getElementById("originPreviewMeta");
+const stylizedPreviewCard = document.getElementById("stylizedPreviewCard");
+const stylizedPreviewImage = document.getElementById("stylizedPreviewImage");
+const stylizedPreviewPlaceholder = document.getElementById("stylizedPreviewPlaceholder");
+const stylizedPreviewLabel = document.getElementById("stylizedPreviewLabel");
+const stylizedPreviewMeta = document.getElementById("stylizedPreviewMeta");
+const gridPreviewCard = document.getElementById("gridPreviewCard");
+const gridPreviewImage = document.getElementById("gridPreviewImage");
+const gridPreviewPlaceholder = document.getElementById("gridPreviewPlaceholder");
+const gridPreviewMeta = document.getElementById("gridPreviewMeta");
 
 const zoomModal = document.getElementById("zoomModal");
 const zoomModalBackdrop = document.getElementById("zoomModalBackdrop");
@@ -99,17 +123,184 @@ const IS_IOS_DEVICE = /iphone|ipad|ipod/.test(USER_AGENT);
 const CROP_MIN_SIZE = 48;
 const CROP_HANDLE_SIZE = 10;
 const CROP_MARGIN_RATIO = 0.08;
+const STYLE_MODE_FINE = "fine";
+const STYLE_MODE_CARTOON = "cartoon";
+const WORK_LIBRARY_STORAGE_KEY = "bead_web_work_library_v1";
+const ACCOUNT_ID_STORAGE_KEY = "bead_web_account_id_v1";
+
+const PAPER_LIBRARY = [
+  {
+    id: "p1",
+    title: "奶油猫头像",
+    author: "豆友_A",
+    avatarText: "A",
+    size: "32x32",
+    colorCount: 8,
+    difficulty: "入门",
+    scene: "第一次拼豆",
+    audience: ["拼豆小白", "亲子家庭", "手工爱好者"],
+    theme: "动物",
+    hot: true,
+    views: 328,
+    clones: 67,
+    likes: 103,
+    favorites: 211,
+    official: true,
+    createdAt: 20260222,
+    tone: "orange"
+  },
+  {
+    id: "p2",
+    title: "春节福马",
+    author: "豆友_B",
+    avatarText: "B",
+    size: "48x48",
+    colorCount: 14,
+    difficulty: "进阶",
+    scene: "送礼物",
+    audience: ["情侣", "手工爱好者"],
+    theme: "节日",
+    hot: true,
+    views: 276,
+    clones: 54,
+    likes: 79,
+    favorites: 164,
+    official: false,
+    createdAt: 20260220,
+    tone: "gold"
+  },
+  {
+    id: "p3",
+    title: "情侣像素头像",
+    author: "豆友_C",
+    avatarText: "C",
+    size: "40x40",
+    colorCount: 12,
+    difficulty: "进阶",
+    scene: "情侣纪念",
+    audience: ["情侣"],
+    theme: "情侣",
+    hot: false,
+    views: 198,
+    clones: 41,
+    likes: 50,
+    favorites: 129,
+    official: false,
+    createdAt: 20260218,
+    tone: "pink"
+  },
+  {
+    id: "p4",
+    title: "招财猫挂件",
+    author: "豆友_D",
+    avatarText: "D",
+    size: "28x28",
+    colorCount: 7,
+    difficulty: "入门",
+    scene: "摆摊爆款",
+    audience: ["摆摊卖家", "手工爱好者"],
+    theme: "卡通",
+    hot: true,
+    views: 351,
+    clones: 73,
+    likes: 45,
+    favorites: 50,
+    official: false,
+    createdAt: 20260221,
+    tone: "red"
+  },
+  {
+    id: "p5",
+    title: "新年文字牌",
+    author: "豆友_E",
+    avatarText: "E",
+    size: "36x24",
+    colorCount: 6,
+    difficulty: "入门",
+    scene: "亲子手工",
+    audience: ["拼豆小白", "亲子家庭"],
+    theme: "文字",
+    hot: false,
+    views: 143,
+    clones: 19,
+    likes: 38,
+    favorites: 66,
+    official: true,
+    createdAt: 20260215,
+    tone: "purple"
+  },
+  {
+    id: "p6",
+    title: "柴犬摆件",
+    author: "豆友_F",
+    avatarText: "F",
+    size: "64x64",
+    colorCount: 22,
+    difficulty: "高阶",
+    scene: "节日装饰",
+    audience: ["手工爱好者", "摆摊卖家"],
+    theme: "动物",
+    hot: false,
+    views: 124,
+    clones: 17,
+    likes: 21,
+    favorites: 47,
+    official: false,
+    createdAt: 20260212,
+    tone: "orange"
+  }
+];
+
+const TAG_OPTIONS = {
+  recommend: ["全部", "新手友好", "高复用", "节日热榜"],
+  scene: ["全部", "第一次拼豆", "送礼物", "情侣纪念", "亲子手工", "摆摊爆款", "节日装饰"],
+  people: ["全部", "拼豆小白", "情侣", "亲子家庭", "手工爱好者", "摆摊卖家"],
+  difficulty: ["全部", "入门", "进阶", "高阶"]
+};
 
 const state = {
+  currentView: "square",
   grid: null,
   legend: null,
   gridSize: DEFAULT_GRID_SIZE,
   codeByHex: null,
   codeGrid: null,
   sourceFile: null,
+  sourcePreviewUrl: "",
+  stylizedPreviewUrl: "",
+  gridPreviewUrl: "",
+  generatedStylizedFile: null,
+  stylizedSourceFingerprint: "",
+  workName: "",
   patternLayout: null,
   legendExpanded: false,
-  exportSettings: null
+  styleMode: STYLE_MODE_FINE,
+  isGenerating: false,
+  exportSettings: null,
+  workLibrary: [],
+  accountId: "",
+  square: {
+    mainNavs: [
+      { id: "recommend", label: "推荐" },
+      { id: "scene", label: "场景" },
+      { id: "people", label: "人群" },
+      { id: "difficulty", label: "难度" }
+    ],
+    sortNavs: [
+      { id: "hot", label: "热门" },
+      { id: "featured", label: "精选" },
+      { id: "all", label: "全部" }
+    ],
+    activeMainNav: "recommend",
+    activeSortNav: "hot",
+    activeTag: "全部",
+    activeTagOptions: TAG_OPTIONS.recommend,
+    searchKeyword: "",
+    searchDraft: "",
+    showSearchPanel: false,
+    papers: PAPER_LIBRARY.map((item) => ({ ...item })),
+    displayPapers: []
+  }
 };
 
 const cropState = {
@@ -196,6 +387,135 @@ function persistExportSettings() {
   }
 }
 
+function createAccountId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  let output = "";
+  for (let i = 0; i < 14; i += 1) {
+    output += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return output;
+}
+
+function ensureAccountId() {
+  try {
+    const cached = window.localStorage.getItem(ACCOUNT_ID_STORAGE_KEY);
+    if (cached) {
+      state.accountId = cached;
+      return;
+    }
+    const next = createAccountId();
+    window.localStorage.setItem(ACCOUNT_ID_STORAGE_KEY, next);
+    state.accountId = next;
+  } catch (_error) {
+    state.accountId = createAccountId();
+  }
+}
+
+function formatRelativeTime(timestamp) {
+  const diff = Date.now() - (Number(timestamp) || Date.now());
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < hour) {
+    return `${Math.max(1, Math.round(diff / minute))}分钟前`;
+  }
+  if (diff < day) {
+    return `${Math.max(1, Math.round(diff / hour))}小时前`;
+  }
+  return `${Math.max(1, Math.round(diff / day))}天前`;
+}
+
+function sanitizeStoredPreview(url) {
+  const safe = String(url || "");
+  if (!safe || safe.startsWith("blob:")) return "";
+  return safe;
+}
+
+function serializeWorkLibrary() {
+  return state.workLibrary.map((item) => ({
+    ...item,
+    previewImages: {
+      origin: sanitizeStoredPreview(item.previewImages && item.previewImages.origin),
+      ai: sanitizeStoredPreview(item.previewImages && item.previewImages.ai),
+      grid: sanitizeStoredPreview(item.previewImages && item.previewImages.grid)
+    }
+  }));
+}
+
+function persistWorkLibrary() {
+  try {
+    window.localStorage.setItem(WORK_LIBRARY_STORAGE_KEY, JSON.stringify(serializeWorkLibrary()));
+  } catch (_error) {
+    // Ignore storage issues.
+  }
+}
+
+function loadWorkLibrary() {
+  try {
+    const raw = window.localStorage.getItem(WORK_LIBRARY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    state.workLibrary = Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    state.workLibrary = [];
+  }
+}
+
+function getSquareHotScore(item) {
+  return item.views * 0.2 + item.likes * 2 + item.favorites * 3 + item.clones * 2;
+}
+
+function matchSquareMainTag(item) {
+  const square = state.square;
+  if (square.activeTag === "全部") return true;
+  if (square.activeMainNav === "scene") {
+    return item.scene === square.activeTag;
+  }
+  if (square.activeMainNav === "people") {
+    return Array.isArray(item.audience) && item.audience.includes(square.activeTag);
+  }
+  if (square.activeMainNav === "difficulty") {
+    return item.difficulty === square.activeTag;
+  }
+  if (square.activeTag === "新手友好") return item.difficulty === "入门";
+  if (square.activeTag === "高复用") return item.clones >= 40;
+  if (square.activeTag === "节日热榜") return item.theme === "节日" || item.scene === "节日装饰";
+  return true;
+}
+
+function sortSquareItems(items) {
+  const square = state.square;
+  const list = [...items];
+  if (square.activeSortNav === "all") {
+    return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }
+  if (square.activeSortNav === "featured") {
+    return list
+      .filter((item) => Boolean(item.official))
+      .sort((a, b) => getSquareHotScore(b) - getSquareHotScore(a));
+  }
+  return list.sort((a, b) => getSquareHotScore(b) - getSquareHotScore(a));
+}
+
+function applySquareFilters() {
+  const square = state.square;
+  const keyword = String(square.searchKeyword || "").trim().toLowerCase();
+  const filtered = square.papers.filter((item) => {
+    const matchesKeyword = !keyword
+      || item.title.toLowerCase().includes(keyword)
+      || item.author.toLowerCase().includes(keyword)
+      || item.theme.toLowerCase().includes(keyword)
+      || item.scene.toLowerCase().includes(keyword);
+    return matchesKeyword && matchSquareMainTag(item);
+  });
+  square.displayPapers = sortSquareItems(filtered);
+}
+
+function updateSquarePaperList(id, updater) {
+  state.square.papers = state.square.papers.map((item) => (item.id === id ? updater(item) : item));
+  applySquareFilters();
+  renderSquareView();
+}
+
 function getExportModeOptions(format) {
   if (format === "png") {
     return [
@@ -245,6 +565,153 @@ function setStatus(message) {
 function setButtons(enabled) {
   exportPngButton.disabled = !enabled;
   exportPdfButton.disabled = !enabled;
+}
+
+function normalizeWorkName(value) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 20);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getEffectiveWorkName() {
+  const normalized = normalizeWorkName(workNameInput ? workNameInput.value : state.workName);
+  if (normalized) return normalized;
+  if (state.sourceFile && state.sourceFile.name) {
+    const base = state.sourceFile.name.replace(/\.[^.]+$/, "");
+    const fromFile = normalizeWorkName(base);
+    if (fromFile) return fromFile;
+  }
+  return "豆像工坊-拼豆图纸";
+}
+
+function getCurrentStyleMode() {
+  if (!styleModeSelect || styleModeSelect.value !== STYLE_MODE_CARTOON) {
+    return STYLE_MODE_FINE;
+  }
+  return STYLE_MODE_CARTOON;
+}
+
+function getStylizedLabel() {
+  return getCurrentStyleMode() === STYLE_MODE_CARTOON ? "Q版图" : "AI图";
+}
+
+function updateStyleModeHint() {
+  if (!styleModeHintEl) return;
+  styleModeHintEl.textContent = getCurrentStyleMode() === STYLE_MODE_CARTOON
+    ? "卡通像素会先生成 Q 版中间稿，再继续转为拼豆图纸，更适合头像、萌系IP和礼物款。"
+    : "精致像素直接转拼豆图纸，细节保留更多，适合照片和写实插画。";
+  if (stylizedPreviewLabel) {
+    stylizedPreviewLabel.textContent = getStylizedLabel();
+  }
+}
+
+function setGeneratingState(next) {
+  state.isGenerating = Boolean(next);
+  const disabled = !state.sourceFile || state.isGenerating;
+  if (generateNowButton) {
+    generateNowButton.disabled = disabled;
+  }
+  if (regenerateButton) {
+    regenerateButton.disabled = disabled;
+  }
+  if (clearWorkspaceButton) {
+    clearWorkspaceButton.disabled = state.isGenerating;
+  }
+  refreshColorUsageStatus();
+}
+
+function revokeObjectUrlIfNeeded(url) {
+  if (typeof url === "string" && url.startsWith("blob:")) {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function setPreviewUrl(key, nextUrl) {
+  const field = `${key}PreviewUrl`;
+  const prevUrl = state[field];
+  if (prevUrl && prevUrl !== nextUrl) {
+    revokeObjectUrlIfNeeded(prevUrl);
+  }
+  state[field] = nextUrl || "";
+}
+
+function updatePreviewCard(cardEl, imageEl, placeholderEl, metaEl, payload = {}) {
+  if (!cardEl || !imageEl || !placeholderEl || !metaEl) return;
+  const src = String(payload.src || "");
+  const meta = String(payload.meta || "");
+  const placeholder = String(payload.placeholder || "");
+  const busy = Boolean(payload.busy);
+  const ready = Boolean(src);
+
+  imageEl.hidden = !ready;
+  if (ready) {
+    imageEl.src = src;
+  } else {
+    imageEl.removeAttribute("src");
+  }
+  placeholderEl.hidden = ready;
+  placeholderEl.textContent = placeholder;
+  metaEl.textContent = meta;
+  cardEl.disabled = !ready;
+  cardEl.classList.toggle("is-ready", ready);
+  cardEl.classList.toggle("is-busy", busy);
+}
+
+function syncWorkflowPreviewUI() {
+  updateStyleModeHint();
+  if (stylizedPreviewImage) {
+    stylizedPreviewImage.classList.toggle("workflow-thumb-image-pixel", getCurrentStyleMode() !== STYLE_MODE_CARTOON);
+  }
+  updatePreviewCard(originPreviewCard, originPreviewImage, originPreviewPlaceholder, originPreviewMeta, {
+    src: state.sourcePreviewUrl,
+    placeholder: "上传后显示原图",
+    meta: state.sourceFile
+      ? "点击可放大查看裁剪后的原图。"
+      : "建议裁剪到头像或上半身，主体更稳定。"
+  });
+  updatePreviewCard(stylizedPreviewCard, stylizedPreviewImage, stylizedPreviewPlaceholder, stylizedPreviewMeta, {
+    src: state.stylizedPreviewUrl,
+    busy: state.isGenerating && !state.stylizedPreviewUrl,
+    placeholder: state.isGenerating
+      ? `${getStylizedLabel()}生成中...`
+      : `生成后显示${getStylizedLabel()}`,
+    meta: state.stylizedPreviewUrl
+      ? `点击可放大查看${getStylizedLabel()}中间稿。`
+      : getCurrentStyleMode() === STYLE_MODE_CARTOON
+        ? "Q版模式会先生成中间稿，再继续转图纸。"
+        : "精致像素模式不会单独生成Q版中间稿。"
+  });
+  updatePreviewCard(gridPreviewCard, gridPreviewImage, gridPreviewPlaceholder, gridPreviewMeta, {
+    src: state.gridPreviewUrl,
+    busy: state.isGenerating && !state.gridPreviewUrl,
+    placeholder: state.isGenerating ? "图纸生成中..." : "生成后显示拼豆图纸",
+    meta: state.gridPreviewUrl
+      ? "点击可查看完整图纸预览。"
+      : "支持放大看格子、导出 PNG/PDF 和色号统计。"
+  });
+}
+
+function resetGeneratedPreviewState() {
+  setPreviewUrl("stylized", "");
+  setPreviewUrl("grid", "");
+  state.generatedStylizedFile = null;
+  state.stylizedSourceFingerprint = "";
+}
+
+function buildSourceFingerprint(file) {
+  if (!file) return "";
+  return [file.name || "", file.size || 0, file.lastModified || 0].join(":");
 }
 
 function getWechatOpenGuide() {
@@ -365,7 +832,7 @@ function openImagePicker() {
 
 function updatePreviewEmptyState() {
   if (!previewEmptyState) return;
-  const shouldShowEmpty = !state.grid;
+  const shouldShowEmpty = !state.sourceFile && !state.grid;
   previewEmptyState.hidden = !shouldShowEmpty;
   patternViewport.classList.toggle("is-empty", shouldShowEmpty);
 }
@@ -378,6 +845,10 @@ function refreshColorUsageStatus() {
   }
 
   if (state.sourceFile) {
+    if (state.isGenerating) {
+      usageStatusEl.textContent = `正在按${getPaletteUsageDescription()}生成图纸，请稍候。`;
+      return;
+    }
     usageStatusEl.textContent = `尚未生成，正在按${getPaletteUsageDescription()}计算颜色。`;
     return;
   }
@@ -432,10 +903,11 @@ function getEffectPointerDistance() {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
-function openEffectModal(src, title) {
+function openEffectModal(src, title, options = {}) {
   if (!effectModal || !effectModalImage || !effectModalTitle || !effectModalViewport) return;
   effectModalImage.src = src;
   effectModalTitle.textContent = title;
+  effectModalImage.classList.toggle("is-pixel", Boolean(options.pixelated));
   effectModal.hidden = false;
   syncBodyModalState();
   const syncModalZoom = () => {
@@ -537,6 +1009,34 @@ function buildGridCanvas(size, options = {}) {
     codeGrid: options.codeGrid
   });
   return canvas;
+}
+
+function buildPixelPreviewDataUrl(grid) {
+  if (!Array.isArray(grid) || !grid.length) return "";
+  const previewCanvas = document.createElement("canvas");
+  previewCanvas.width = 720;
+  previewCanvas.height = 720;
+  drawGrid(previewCanvas, grid, {
+    gridLines: false,
+    axisLabels: false,
+    showCodes: false,
+    tintAlpha: 0
+  });
+  return previewCanvas.toDataURL("image/png");
+}
+
+function buildGridPreviewDataUrl(grid) {
+  if (!Array.isArray(grid) || !grid.length) return "";
+  const previewCanvas = document.createElement("canvas");
+  previewCanvas.width = 720;
+  previewCanvas.height = 720;
+  drawGrid(previewCanvas, grid, {
+    gridLines: true,
+    axisLabels: false,
+    showCodes: false,
+    tintAlpha: 0
+  });
+  return previewCanvas.toDataURL("image/png");
 }
 
 function drawLegendSection(ctx, legend, layout) {
@@ -890,7 +1390,7 @@ async function exportPdfFromSettings() {
       grid: state.grid,
       legend: state.legend,
       codeGrid: showCodesInput.checked ? state.codeGrid : null,
-      title: "Bead Pattern",
+      title: getEffectiveWorkName(),
       pdfMode: mode
     })
   });
@@ -920,6 +1420,7 @@ async function handleExportConfirm() {
   exportConfirmButton.disabled = true;
 
   try {
+    const safeName = getEffectiveWorkName();
     if (format === "png") {
       setStatus(`正在准备${mode === "standard" ? "高清" : "超清"} PNG...`);
       const blob = await exportPngFromSettings();
@@ -927,13 +1428,13 @@ async function handleExportConfirm() {
         setStatus("PNG 导出失败。");
         return;
       }
-      downloadBlob(blob, `bead-pattern-${mode}.png`);
+      downloadBlob(blob, `${safeName}-${mode}.png`);
       const sizeKb = Math.max(1, Math.round(blob.size / 1024));
       setStatus(`PNG 导出完成（${sizeKb} KB）。`);
     } else {
       setStatus(`正在准备${mode === "a4" ? "A4 分页" : "超大单页"} PDF...`);
       const blob = await exportPdfFromSettings();
-      downloadBlob(blob, `bead-pattern-${mode}.pdf`);
+      downloadBlob(blob, `${safeName}-${mode}.pdf`);
       const sizeKb = Math.max(1, Math.round(blob.size / 1024));
       setStatus(`PDF 导出完成（${sizeKb} KB）。`);
     }
@@ -1242,7 +1743,7 @@ function createZoomController(viewportEl, options = {}) {
 const patternZoom = createZoomController(patternViewport, {
   onZoomChange: () => {
     if (!state.grid) return;
-    renderPatternCanvas();
+    renderPatternCanvas(true);
     refreshReadyStatus();
   },
   onTransform: () => {
@@ -1521,7 +2022,7 @@ function shouldShowCodes(forModal = false) {
   return zoom >= CODE_AUTO_ZOOM_THRESHOLD;
 }
 
-function renderPatternCanvas() {
+function renderPatternCanvas(updatePreview = false) {
   if (!state.grid) return;
   state.patternLayout = drawGrid(patternCanvas, state.grid, {
     gridLines: true,
@@ -1530,6 +2031,10 @@ function renderPatternCanvas() {
     codeByHex: state.codeByHex,
     codeGrid: state.codeGrid
   });
+  if (updatePreview) {
+    setPreviewUrl("grid", buildGridPreviewDataUrl(state.grid));
+    syncWorkflowPreviewUI();
+  }
   renderPatternRulers();
 }
 
@@ -1586,6 +2091,7 @@ function clearPatternOutput() {
   state.codeGrid = null;
   state.patternLayout = null;
   state.legendExpanded = false;
+  resetGeneratedPreviewState();
   clearLegend();
   updateLegendToggle(0);
   setButtons(false);
@@ -1594,11 +2100,294 @@ function clearPatternOutput() {
   updateUploadFilename();
   updatePreviewEmptyState();
   refreshColorUsageStatus();
+  syncWorkflowPreviewUI();
 
   const ctx = patternCanvas.getContext("2d");
   ctx.clearRect(0, 0, patternCanvas.width, patternCanvas.height);
   ctx.fillStyle = "#f2efe8";
   ctx.fillRect(0, 0, patternCanvas.width, patternCanvas.height);
+}
+
+function clearWorkspace({ keepName = false } = {}) {
+  generationId += 1;
+  if (autoGenerateTimer) {
+    clearTimeout(autoGenerateTimer);
+    autoGenerateTimer = null;
+  }
+  closeZoomModal();
+  closeExportModal();
+  state.sourceFile = null;
+  setPreviewUrl("source", "");
+  clearPatternOutput();
+  imageInput.value = "";
+  if (!keepName) {
+    state.workName = "";
+    if (workNameInput) {
+      workNameInput.value = "";
+    }
+  }
+  updateUploadFilename();
+  updatePreviewEmptyState();
+  syncWorkflowPreviewUI();
+  setGeneratingState(false);
+}
+
+function updateWorkRecord(workId, updater) {
+  state.workLibrary = state.workLibrary.map((item) => (item.id === workId ? updater(item) : item));
+  persistWorkLibrary();
+  renderCreateWorksList();
+  renderProfileView();
+}
+
+function prependWorkRecord(work) {
+  state.workLibrary = [work, ...state.workLibrary].slice(0, 20);
+  persistWorkLibrary();
+  renderCreateWorksList();
+  renderProfileView();
+}
+
+function renderCreateWorksList() {
+  if (!createWorksList) return;
+  if (!state.workLibrary.length) {
+    createWorksList.innerHTML = `
+      <section class="works-section-empty">
+        <div class="works-empty-card">
+          <div class="works-empty-title">还没有创作记录</div>
+          <p class="works-empty-desc">上传一张图片后，这里会像小程序“创作”页一样记录原图、AI图和图纸。</p>
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  createWorksList.innerHTML = `
+    <section class="works-section">
+      <div class="works-section-head">
+        <h2>创作</h2>
+        <p>和小程序一致展示最近作品、预览链路与图纸状态。</p>
+      </div>
+      <div class="works-list">
+        ${state.workLibrary.map((item) => `
+          <article class="work-card">
+            <div class="work-title-row">
+              <button class="work-title-editable" type="button" data-action="rename-work" data-work-id="${item.id}">
+                <span class="work-title">${escapeHtml(item.title)}</span>
+                <span class="work-title-edit-icon">✎</span>
+              </button>
+              <span class="work-status ${item.isGenerating ? "is-generating" : ""} ${item.isFailed ? "is-failed" : ""}">${item.status}</span>
+            </div>
+
+            <div class="preview-row">
+              ${["origin", "ai", "grid"].map((type) => {
+                const label = type === "origin" ? "原图" : type === "grid" ? "图纸" : (String(item.style || "").includes("Q版") ? "Q版图" : "AI图");
+                const preview = item.previewImages && item.previewImages[type] ? item.previewImages[type] : "";
+                const pixel = type === "grid" || (type === "ai" && !String(item.style || "").includes("Q版"));
+                return `
+                  <button
+                    class="preview-block ${type === "grid" ? "preview-block-grid" : ""} preview-tone-${type === "origin" ? "origin-a" : type === "ai" ? "ai-a" : "grid-a"}"
+                    type="button"
+                    data-action="preview-work"
+                    data-work-id="${item.id}"
+                    data-view-type="${type}"
+                  >
+                    ${preview ? `<img class="preview-image ${pixel ? "preview-image-pixel" : ""}" src="${preview}" alt="${label}" />` : `<div class="preview-placeholder">${label}</div>`}
+                    <div class="preview-label">${label}</div>
+                  </button>
+                `;
+              }).join("")}
+            </div>
+
+            <div class="work-meta">${escapeHtml(item.size)} · ${escapeHtml(item.style)}</div>
+            ${item.failReason ? `<div class="creator-reason">${escapeHtml(item.failReason)}</div>` : ""}
+            <div class="work-stats">
+              <span>浏览 ${item.views || 0}</span>
+              <span>收藏 ${item.saves || 0}</span>
+              <span>复用 ${item.clones || 0}</span>
+              ${item.beadEstimate ? `<span>豆量 ${item.beadEstimate.total || 0}</span>` : ""}
+              ${item.beadEstimate ? `<span>色数 ${item.beadEstimate.colorUsed || 0}</span>` : ""}
+            </div>
+            <div class="work-footer">
+              <span class="work-date">${escapeHtml(item.date || formatRelativeTime(item.createdAt))}</span>
+              <div class="work-footer-actions">
+                <button class="footer-sheet-btn" type="button" data-action="preview-work" data-work-id="${item.id}" data-view-type="grid">色号图纸</button>
+                <button class="footer-delete-btn" type="button" data-action="delete-work" data-work-id="${item.id}">×</button>
+              </div>
+            </div>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderProfileView() {
+  if (!profileView) return;
+  const summary = state.workLibrary.reduce((acc, item) => {
+    if (item.status === "已完成") acc.works += 1;
+    acc.likes += Number(item.views) || 0;
+    acc.saves += Number(item.saves) || 0;
+    acc.clones += Number(item.clones) || 0;
+    return acc;
+  }, { works: 0, likes: 0, saves: 0, clones: 0 });
+
+  profileView.innerHTML = `
+    <div class="page profile-page">
+      <section class="summary-card">
+        <div class="summary-main">
+          <div class="avatar">豆</div>
+          <div class="summary-meta">
+            <div class="name-row">
+              <span class="nickname">未设置昵称</span>
+              <span class="bean-text">豆币:12</span>
+            </div>
+            <div class="reuse-text">作品总复用：${summary.clones} 次</div>
+          </div>
+        </div>
+        <div class="quick-row">
+          <button class="quick-item" type="button" data-profile-action="favorites">
+            <span class="quick-icon">藏</span>
+            <span>我的收藏</span>
+          </button>
+          <button class="quick-item" type="button" data-profile-action="records">
+            <span class="quick-icon">记</span>
+            <span>生成记录</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="account-card">
+        <div class="account-row">
+          <span class="account-label">账号ID：</span>
+          <span class="account-value">${escapeHtml(state.accountId)}</span>
+          <button class="copy-btn" type="button" data-profile-action="copy-account">复制</button>
+        </div>
+        <div class="account-row">
+          <span class="account-label">豆币余额：</span>
+          <span class="account-value">12拼豆币</span>
+        </div>
+      </section>
+
+      <section class="stats-card">
+        <div class="stat-item"><span class="stat-value">${summary.works}</span><span class="stat-label">完成作品</span></div>
+        <div class="stat-item"><span class="stat-value">${summary.likes}</span><span class="stat-label">获赞</span></div>
+        <div class="stat-item"><span class="stat-value">${summary.saves}</span><span class="stat-label">被收藏</span></div>
+        <div class="stat-item"><span class="stat-value">${summary.clones}</span><span class="stat-label">复用</span></div>
+      </section>
+
+      <section class="menu-card">
+        ${["豆币明细", "获赞与收藏", "导出记录", "账号设置"].map((title) => `
+          <button class="menu-item" type="button" data-profile-action="coming-soon">
+            <span>${title}</span>
+            <span class="arrow">›</span>
+          </button>
+        `).join("")}
+      </section>
+
+      <button class="contact-btn" type="button" data-profile-action="contact">联系客服</button>
+    </div>
+  `;
+}
+
+function renderSquareView() {
+  if (!squareView) return;
+  const square = state.square;
+  squareView.innerHTML = `
+    <div class="page square-page">
+      <section class="square-top-nav">
+        <div class="main-nav-row">
+          <div class="main-nav-list">
+            ${square.mainNavs.map((item) => `
+              <button class="main-nav-item ${square.activeMainNav === item.id ? "is-active" : ""}" type="button" data-square-action="main-nav" data-id="${item.id}">
+                ${escapeHtml(item.label)}
+              </button>
+            `).join("")}
+          </div>
+          <button class="search-entry" type="button" data-square-action="open-search">🔍</button>
+        </div>
+
+        <div class="sort-row">
+          <div class="sort-list">
+            ${square.sortNavs.map((item) => `
+              <button class="sort-item ${square.activeSortNav === item.id ? "is-active" : ""}" type="button" data-square-action="sort-nav" data-id="${item.id}">
+                ${escapeHtml(item.label)}
+              </button>
+            `).join("")}
+          </div>
+          <button class="sort-filter-icon" type="button" data-square-action="filter-hint">⚲</button>
+        </div>
+
+        <div class="tag-row">
+          <div class="tag-list">
+            ${square.activeTagOptions.map((tag) => `
+              <button class="tag-chip ${square.activeTag === tag ? "is-active" : ""}" type="button" data-square-action="tag" data-tag="${escapeHtml(tag)}">
+                ${escapeHtml(tag)}
+              </button>
+            `).join("")}
+          </div>
+        </div>
+
+        ${square.searchKeyword ? `
+          <div class="search-state">
+            <span>关键词：${escapeHtml(square.searchKeyword)}</span>
+            <button class="clear-link" type="button" data-square-action="clear-search">清除</button>
+          </div>
+        ` : ""}
+      </section>
+
+      <section class="paper-grid">
+        ${square.displayPapers.map((item) => `
+          <article class="paper-card">
+            <button class="paper-cover tone-${item.tone}" type="button" data-square-action="preview-paper" data-id="${item.id}">
+              ${item.hot ? '<span class="hot-tag">热门</span>' : ""}
+              <span class="paper-pixel"><span class="paper-pixel-text">${escapeHtml(item.theme)}</span></span>
+            </button>
+            <div class="paper-title">${escapeHtml(item.title)}</div>
+            <div class="paper-author-row">
+              <span class="author-avatar">${escapeHtml(item.avatarText)}</span>
+              <span class="author-name">${escapeHtml(item.author)}</span>
+              <span class="paper-size">${escapeHtml(item.size)}</span>
+            </div>
+            <div class="paper-meta-row">
+              <span class="meta-tag">${escapeHtml(item.scene)}</span>
+              <span class="meta-tag">${escapeHtml(item.difficulty)}</span>
+            </div>
+            <div class="paper-action-row">
+              <span class="mini-btn metric-btn">♡ ${item.likes}</span>
+              <span class="mini-btn metric-btn">☆ ${item.favorites}</span>
+              <button class="mini-btn export-btn" type="button" data-square-action="export-paper" data-id="${item.id}">⬇</button>
+              <button class="mini-btn edit-btn" type="button" data-square-action="edit-paper" data-id="${item.id}">✎</button>
+            </div>
+          </article>
+        `).join("")}
+      </section>
+
+      ${square.displayPapers.length ? "" : '<div class="empty-block">暂无匹配图纸，试试切换筛选条件</div>'}
+
+      <button class="square-generate-btn" type="button" data-square-action="generate">AI生成图纸</button>
+
+      ${square.showSearchPanel ? `
+        <div class="square-overlay">
+          <div class="search-modal">
+            <div class="search-modal-title">搜索图纸</div>
+            <div class="search-modal-row">
+              <input id="squareSearchInput" class="search-modal-input" placeholder="输入图案、场景或作者" value="${escapeHtml(square.searchDraft)}" />
+              <button class="search-modal-btn" type="button" data-square-action="confirm-search">搜索</button>
+            </div>
+          </div>
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function setCurrentView(view) {
+  state.currentView = view;
+  if (squareView) squareView.classList.toggle("is-active", view === "square");
+  if (createView) createView.classList.toggle("is-active", view === "create");
+  if (profileView) profileView.classList.toggle("is-active", view === "profile");
+  siteTabButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.view === view);
+  });
 }
 
 function scheduleAutoGenerate(delay = 280) {
@@ -2257,6 +3046,102 @@ async function buildCroppedFile() {
   });
 }
 
+async function buildFileFromUrl(url, filename = "stylized.png") {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error("stylized-download-failed");
+  }
+  const blob = await res.blob();
+  return new File([blob], filename, {
+    type: blob.type || "image/png",
+    lastModified: Date.now()
+  });
+}
+
+async function ensureStylizedGenerationFile(sourceFile) {
+  const styleMode = getCurrentStyleMode();
+  if (styleMode !== STYLE_MODE_CARTOON) {
+    setPreviewUrl("stylized", "");
+    state.generatedStylizedFile = null;
+    state.stylizedSourceFingerprint = "";
+    syncWorkflowPreviewUI();
+    return sourceFile;
+  }
+
+  const fingerprint = buildSourceFingerprint(sourceFile);
+  if (
+    state.generatedStylizedFile
+    && state.stylizedSourceFingerprint
+    && state.stylizedSourceFingerprint === fingerprint
+  ) {
+    return state.generatedStylizedFile;
+  }
+
+  setPreviewUrl("stylized", "");
+  syncWorkflowPreviewUI();
+  setStatus("正在生成Q版中间稿...");
+
+  const formData = new FormData();
+  formData.append("image", sourceFile);
+  formData.append("maxEdge", maxEdgeSizeInput.value);
+  formData.append("style", "q-version");
+  formData.append("mode", "cartoon");
+  formData.append("prompt", `请将图片转换为Q版卡通风格，保留主体识别度与主色，方便后续像素化。作品名：${getEffectiveWorkName()}`);
+
+  const res = await fetch("/api/q-cartoonize", {
+    method: "POST",
+    body: formData
+  });
+
+  if (!res.ok) {
+    throw new Error("q-cartoonize-failed");
+  }
+
+  const payload = await res.json();
+  const outputUrl = String(
+    payload.imagePath
+    || payload.stylizedImagePath
+    || payload.outputImagePath
+    || payload.url
+    || ""
+  );
+  if (!outputUrl) {
+    throw new Error("q-cartoonize-empty");
+  }
+
+  const stylizedFile = await buildFileFromUrl(outputUrl, `${getEffectiveWorkName()}-q版.png`);
+  state.generatedStylizedFile = stylizedFile;
+  state.stylizedSourceFingerprint = fingerprint;
+  setPreviewUrl("stylized", outputUrl);
+  syncWorkflowPreviewUI();
+  return stylizedFile;
+}
+
+function buildPendingWorkRecord() {
+  const workId = `w-${Date.now()}`;
+  return {
+    id: workId,
+    title: getEffectiveWorkName(),
+    date: "刚刚",
+    createdAt: Date.now(),
+    size: "转换中",
+    style: getCurrentStyleMode() === STYLE_MODE_CARTOON ? "卡通像素（Q版）" : "精致像素",
+    status: "转换中",
+    isGenerating: true,
+    isFailed: false,
+    failReason: "",
+    views: 0,
+    saves: 0,
+    clones: 0,
+    previewImages: {
+      origin: state.sourcePreviewUrl,
+      ai: "",
+      grid: ""
+    },
+    beadEstimate: null
+  };
+}
+
 async function generatePattern(fileOverride = null) {
   if (autoGenerateTimer) {
     clearTimeout(autoGenerateTimer);
@@ -2270,23 +3155,55 @@ async function generatePattern(fileOverride = null) {
   }
 
   const runId = ++generationId;
-  setStatus("正在生成图纸...");
+  state.workName = getEffectiveWorkName();
+  if (workNameInput) {
+    workNameInput.value = state.workName;
+  }
+  const pendingWork = buildPendingWorkRecord();
+  prependWorkRecord(pendingWork);
+  setGeneratingState(true);
+  setPreviewUrl("grid", "");
+  if (getCurrentStyleMode() !== STYLE_MODE_CARTOON) {
+    setPreviewUrl("stylized", "");
+  }
+  syncWorkflowPreviewUI();
+  setStatus(getCurrentStyleMode() === STYLE_MODE_CARTOON ? "正在准备Q版图纸..." : "正在生成图纸...");
   setButtons(false);
 
-  const formData = new FormData();
-  formData.append("image", file);
-  formData.append("gridSize", String(getSafeGridSize(gridSizeSelect.value)));
-  formData.append("maxEdgeSize", maxEdgeSizeInput.value);
-  formData.append("maxColors", FIXED_MAX_COLORS);
-  formData.append("paletteId", paletteSelect.value);
-  formData.append("mappingStrategy", FIXED_MAPPING_STRATEGY);
-  formData.append("preprocessMode", FIXED_PREPROCESS_MODE);
-  formData.append("samplingMode", samplingModeSelect.value);
-  formData.append("alpha", FIXED_ALPHA);
-  formData.append("beta", FIXED_BETA);
-  formData.append("optimize", optimizeInput.checked ? "true" : "false");
-
   try {
+    const generationFile = await ensureStylizedGenerationFile(file);
+    if (runId !== generationId) {
+      return;
+    }
+    if (state.stylizedPreviewUrl) {
+      updateWorkRecord(pendingWork.id, (item) => ({
+        ...item,
+        previewImages: {
+          ...item.previewImages,
+          ai: state.stylizedPreviewUrl
+        }
+      }));
+    }
+
+    const formData = new FormData();
+    formData.append("image", generationFile, generationFile.name || `${state.workName}.png`);
+    formData.append("gridSize", String(getSafeGridSize(gridSizeSelect.value)));
+    formData.append("maxEdgeSize", maxEdgeSizeInput.value);
+    formData.append("maxColors", FIXED_MAX_COLORS);
+    formData.append("paletteId", paletteSelect.value);
+    formData.append("mappingStrategy", FIXED_MAPPING_STRATEGY);
+    formData.append("preprocessMode", FIXED_PREPROCESS_MODE);
+    formData.append("samplingMode", samplingModeSelect.value);
+    formData.append("alpha", FIXED_ALPHA);
+    formData.append("beta", FIXED_BETA);
+    formData.append("optimize", optimizeInput.checked ? "true" : "false");
+
+    if (getCurrentStyleMode() === STYLE_MODE_CARTOON) {
+      setStatus("Q版中间稿已完成，正在生成拼豆图纸...");
+    } else {
+      setStatus("正在生成拼豆图纸...");
+    }
+
     const res = await fetch("/api/generate", {
       method: "POST",
       body: formData
@@ -2316,6 +3233,9 @@ async function generatePattern(fileOverride = null) {
     state.codeByHex = data.codeByHex || null;
     state.codeGrid = data.codeGrid || null;
     state.legendExpanded = false;
+    if (getCurrentStyleMode() !== STYLE_MODE_CARTOON) {
+      setPreviewUrl("stylized", buildPixelPreviewDataUrl(state.grid));
+    }
     updatePreviewEmptyState();
 
     renderPatternCanvas();
@@ -2324,23 +3244,57 @@ async function generatePattern(fileOverride = null) {
     refreshReadyStatus();
     renderExportPreview();
     setButtons(true);
+    syncWorkflowPreviewUI();
+    updateWorkRecord(pendingWork.id, (item) => ({
+      ...item,
+      title: state.workName,
+      date: "刚刚",
+      size: `${data.gridSize}x${data.gridSize}`,
+      status: "已完成",
+      isGenerating: false,
+      previewImages: {
+        origin: state.sourcePreviewUrl,
+        ai: state.stylizedPreviewUrl,
+        grid: state.gridPreviewUrl
+      },
+      beadEstimate: {
+        total: data.gridSize * data.gridSize,
+        colorUsed: Array.isArray(data.legend) ? data.legend.length : 0
+      }
+    }));
 
     if (!zoomModal.hidden) {
       renderModalPattern();
     }
-  } catch (_error) {
+  } catch (error) {
     if (runId !== generationId) return;
-    setStatus("图纸生成失败。");
+    const message = error && error.message === "q-cartoonize-failed"
+      ? "Q版中间稿生成失败，请稍后重试。"
+      : "图纸生成失败。";
+    setStatus(message);
+    updateWorkRecord(pendingWork.id, (item) => ({
+      ...item,
+      status: "转换失败",
+      isGenerating: false,
+      isFailed: true,
+      failReason: message,
+      size: "-"
+    }));
     setButtons(Boolean(state.grid));
     updatePreviewEmptyState();
     refreshColorUsageStatus();
     renderExportPreview();
+  } finally {
+    if (runId === generationId) {
+      setGeneratingState(false);
+      syncWorkflowPreviewUI();
+    }
   }
 }
 
 function openPatternModal() {
   if (!state.grid) return;
-  zoomModalTitle.textContent = "图纸（放大）";
+  zoomModalTitle.textContent = `${getEffectiveWorkName()} · 图纸（放大）`;
   zoomModalCanvas.hidden = false;
   zoomModalCanvas.style.display = "";
   renderModalPattern();
@@ -2453,6 +3407,42 @@ if (previewReuploadTriggerButton) {
   });
 }
 
+if (generateNowButton) {
+  generateNowButton.addEventListener("click", () => {
+    generatePattern();
+  });
+}
+
+if (regenerateButton) {
+  regenerateButton.addEventListener("click", () => {
+    generatePattern();
+  });
+}
+
+if (clearWorkspaceButton) {
+  clearWorkspaceButton.addEventListener("click", () => {
+    const shouldClear = !state.sourceFile || window.confirm("确定清空当前作品和预览吗？");
+    if (!shouldClear) return;
+    clearWorkspace();
+    setStatus("当前作品已清空。重新上传后可继续生成。");
+  });
+}
+
+if (styleModeSelect) {
+  styleModeSelect.addEventListener("change", () => {
+    state.styleMode = getCurrentStyleMode();
+    resetGeneratedPreviewState();
+    syncWorkflowPreviewUI();
+    scheduleAutoGenerate(180);
+  });
+}
+
+if (workNameInput) {
+  workNameInput.addEventListener("input", () => {
+    state.workName = normalizeWorkName(workNameInput.value);
+  });
+}
+
 if (copyPageLinkButton) {
   copyPageLinkButton.addEventListener("click", async () => {
     try {
@@ -2470,6 +3460,208 @@ if (previewEmptyState) {
   });
   previewEmptyState.addEventListener("click", () => {
     openImagePicker();
+  });
+}
+
+siteTabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const view = button.dataset.view || "create";
+    setCurrentView(view);
+  });
+});
+
+if (squareView) {
+  squareView.addEventListener("click", (event) => {
+    const actionEl = event.target.closest("[data-square-action]");
+    if (actionEl) {
+      const action = actionEl.dataset.squareAction;
+      const id = actionEl.dataset.id;
+      if (action === "main-nav" && id) {
+        state.square.activeMainNav = id;
+        state.square.activeTag = "全部";
+        state.square.activeTagOptions = TAG_OPTIONS[id] || ["全部"];
+        applySquareFilters();
+        renderSquareView();
+        return;
+      }
+      if (action === "sort-nav" && id) {
+        state.square.activeSortNav = id;
+        applySquareFilters();
+        renderSquareView();
+        return;
+      }
+      if (action === "tag") {
+        state.square.activeTag = actionEl.dataset.tag || "全部";
+        applySquareFilters();
+        renderSquareView();
+        return;
+      }
+      if (action === "open-search") {
+        state.square.showSearchPanel = true;
+        state.square.searchDraft = state.square.searchKeyword;
+        renderSquareView();
+        window.requestAnimationFrame(() => {
+          const input = document.getElementById("squareSearchInput");
+          if (input) input.focus();
+        });
+        return;
+      }
+      if (action === "confirm-search") {
+        const input = document.getElementById("squareSearchInput");
+        state.square.searchKeyword = input ? input.value.trim() : state.square.searchDraft;
+        state.square.searchDraft = state.square.searchKeyword;
+        state.square.showSearchPanel = false;
+        applySquareFilters();
+        renderSquareView();
+        return;
+      }
+      if (action === "clear-search") {
+        state.square.searchKeyword = "";
+        state.square.searchDraft = "";
+        applySquareFilters();
+        renderSquareView();
+        return;
+      }
+      if (action === "filter-hint") {
+        setStatus("可按场景、人群、难度筛选。");
+        return;
+      }
+      if (action === "generate") {
+        setCurrentView("create");
+        openImagePicker();
+        return;
+      }
+      if (action === "preview-paper" && id) {
+        updateSquarePaperList(id, (item) => ({ ...item, views: item.views + 1 }));
+        const paper = state.square.papers.find((item) => item.id === id);
+        openEffectModal("/assets/logoxiangsu.png", `${paper ? paper.title : "图纸"} · 预览`, { pixelated: true });
+        return;
+      }
+      if (action === "export-paper" && id) {
+        updateSquarePaperList(id, (item) => ({ ...item, clones: item.clones + 1 }));
+        setStatus("已模拟导出图纸，可继续进入创作页进行个性化调整。");
+        return;
+      }
+      if (action === "edit-paper" && id) {
+        const paper = state.square.papers.find((item) => item.id === id);
+        if (workNameInput && paper) {
+          workNameInput.value = paper.title;
+        }
+        state.workName = paper ? paper.title : "";
+        setCurrentView("create");
+        setStatus("已切换到创作页，可基于当前选中的图纸主题继续生成。");
+        return;
+      }
+    }
+
+    if (state.square.showSearchPanel && event.target.classList.contains("square-overlay")) {
+      state.square.showSearchPanel = false;
+      renderSquareView();
+    }
+  });
+
+  squareView.addEventListener("input", (event) => {
+    if (event.target && event.target.id === "squareSearchInput") {
+      state.square.searchDraft = event.target.value || "";
+    }
+  });
+
+  squareView.addEventListener("keydown", (event) => {
+    if (event.target && event.target.id === "squareSearchInput" && event.key === "Enter") {
+      state.square.searchKeyword = event.target.value.trim();
+      state.square.searchDraft = state.square.searchKeyword;
+      state.square.showSearchPanel = false;
+      applySquareFilters();
+      renderSquareView();
+    }
+  });
+}
+
+if (createWorksList) {
+  createWorksList.addEventListener("click", (event) => {
+    const actionEl = event.target.closest("[data-action]");
+    if (!actionEl) return;
+    const workId = actionEl.dataset.workId;
+    const action = actionEl.dataset.action;
+    const viewType = actionEl.dataset.viewType || "grid";
+    const work = state.workLibrary.find((item) => item.id === workId);
+    if (!work) return;
+
+    if (action === "rename-work") {
+      const nextName = window.prompt("修改作品名称", work.title || "");
+      const normalized = normalizeWorkName(nextName);
+      if (!normalized) return;
+      updateWorkRecord(workId, (item) => ({ ...item, title: normalized }));
+      return;
+    }
+
+    if (action === "delete-work") {
+      const confirmed = window.confirm("删除后不可恢复，确认删除吗？");
+      if (!confirmed) return;
+      state.workLibrary = state.workLibrary.filter((item) => item.id !== workId);
+      persistWorkLibrary();
+      renderCreateWorksList();
+      renderProfileView();
+      return;
+    }
+
+    if (action === "preview-work") {
+      const imagePath = work.previewImages && work.previewImages[viewType] ? work.previewImages[viewType] : "";
+      if (!imagePath) return;
+      const label = viewType === "origin" ? "原图" : viewType === "grid" ? "图纸" : (String(work.style || "").includes("Q版") ? "Q版图" : "AI图");
+      openEffectModal(imagePath, `${work.title} · ${label}`, {
+        pixelated: viewType === "grid" || (viewType === "ai" && !String(work.style || "").includes("Q版"))
+      });
+    }
+  });
+}
+
+if (profileView) {
+  profileView.addEventListener("click", async (event) => {
+    const actionEl = event.target.closest("[data-profile-action]");
+    if (!actionEl) return;
+    const action = actionEl.dataset.profileAction;
+    if (action === "records") {
+      setCurrentView("create");
+      return;
+    }
+    if (action === "copy-account") {
+      try {
+        await navigator.clipboard.writeText(state.accountId);
+        setStatus("账号ID已复制。");
+      } catch (_error) {
+        setStatus("复制失败，请手动记录账号ID。");
+      }
+      return;
+    }
+    if (action === "contact") {
+      setStatus("可先通过微信消息联系我们。");
+      return;
+    }
+    setStatus("该功能仍在补齐中。");
+  });
+}
+
+if (originPreviewCard) {
+  originPreviewCard.addEventListener("click", () => {
+    if (!state.sourcePreviewUrl) return;
+    openEffectModal(state.sourcePreviewUrl, "原图预览", { pixelated: false });
+  });
+}
+
+if (stylizedPreviewCard) {
+  stylizedPreviewCard.addEventListener("click", () => {
+    if (!state.stylizedPreviewUrl) return;
+    openEffectModal(state.stylizedPreviewUrl, `${getStylizedLabel()}预览`, {
+      pixelated: getCurrentStyleMode() !== STYLE_MODE_CARTOON
+    });
+  });
+}
+
+if (gridPreviewCard) {
+  gridPreviewCard.addEventListener("click", () => {
+    if (!state.grid) return;
+    openPatternModal();
   });
 }
 
@@ -2620,22 +3812,22 @@ if (effectCompareStage && effectDivider) {
     const split = clamp(getEffectComparePosition() / 100, 0, 1);
 
     if (ratio <= split) {
-      openEffectModal("/assets/logo.png", "原图（放大）");
+      openEffectModal("/assets/logo.png", "原图（放大）", { pixelated: false });
     } else {
-      openEffectModal("/assets/logoxiangsu.png", "拼豆图纸效果（放大）");
+      openEffectModal("/assets/logoxiangsu.png", "拼豆图纸效果（放大）", { pixelated: true });
     }
   });
 }
 
 if (effectOpenOriginalButton) {
   effectOpenOriginalButton.addEventListener("click", () => {
-    openEffectModal("/assets/logo.png", "原图（放大）");
+    openEffectModal("/assets/logo.png", "原图（放大）", { pixelated: false });
   });
 }
 
 if (effectOpenResultButton) {
   effectOpenResultButton.addEventListener("click", () => {
-    openEffectModal("/assets/logoxiangsu.png", "拼豆图纸效果（放大）");
+    openEffectModal("/assets/logoxiangsu.png", "拼豆图纸效果（放大）", { pixelated: true });
   });
 }
 
@@ -2670,8 +3862,7 @@ imageInput.addEventListener("change", async () => {
   if (!file) return;
   updateUploadFilename();
   if (state.sourceFile) {
-    state.sourceFile = null;
-    clearPatternOutput();
+    clearWorkspace({ keepName: false });
   }
   await openCropModal(file);
 });
@@ -2758,8 +3949,14 @@ cropConfirmButton.addEventListener("click", async () => {
   }
 
   state.sourceFile = croppedFile;
+  setPreviewUrl("source", URL.createObjectURL(croppedFile));
+  resetGeneratedPreviewState();
+  if (workNameInput && !normalizeWorkName(workNameInput.value)) {
+    workNameInput.value = normalizeWorkName(croppedFile.name.replace(/\.[^.]+$/, ""));
+  }
   updatePreviewEmptyState();
   refreshColorUsageStatus();
+  syncWorkflowPreviewUI();
   closeCropModal();
   await generatePattern(croppedFile);
 });
@@ -2848,6 +4045,13 @@ window.addEventListener("keydown", (event) => {
 
 syncMaxEdgeControls({ resetToMax: true });
 loadPalettes();
+ensureAccountId();
+loadWorkLibrary();
+applySquareFilters();
+renderSquareView();
+renderCreateWorksList();
+renderProfileView();
+updateStyleModeHint();
 syncExportControls();
 updateUploadFilename();
 updatePreviewEmptyState();
@@ -2855,6 +4059,9 @@ refreshColorUsageStatus();
 renderExportPreview();
 updateWechatNoticeVisibility();
 setButtons(false);
+setGeneratingState(false);
+syncWorkflowPreviewUI();
+setCurrentView(state.currentView);
 setStatus("请选择一张照片，放大并裁成上半身或头像，完成裁剪后系统会自动生成拼豆图纸。");
 patternZoom.setContent(patternCanvas, patternCanvas.width, patternCanvas.height);
 zoomModalCanvas.hidden = true;

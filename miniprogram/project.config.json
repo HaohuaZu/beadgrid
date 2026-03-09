@@ -10,7 +10,8 @@
     "es6": true,
     "enhance": true,
     "postcss": true,
-    "minified": false
+    "minified": false,
+    "useApiHook": false
   },
   "compileType": "miniprogram",
   "libVersion": "2.33.0",

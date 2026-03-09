@@ -12,6 +12,50 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function tuneSampleColor(sample, options = {}) {
+  const contrastBoost = clamp(Number(options.contrastBoost) || 1, 0.8, 1.45);
+  const saturationBoost = clamp(Number(options.saturationBoost) || 1, 0.8, 1.5);
+  const shadowBoost = clamp(Number(options.shadowBoost) || 0, 0, 0.28);
+  const neutralDarkBias = clamp(Number(options.neutralDarkBias) || 0, 0, 0.4);
+  let r = Number(sample && sample.r) || 0;
+  let g = Number(sample && sample.g) || 0;
+  let b = Number(sample && sample.b) || 0;
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+  const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+
+  r = (r - 128) * contrastBoost + 128;
+  g = (g - 128) * contrastBoost + 128;
+  b = (b - 128) * contrastBoost + 128;
+
+  const boostedLum = 0.299 * r + 0.587 * g + 0.114 * b;
+  r = boostedLum + (r - boostedLum) * saturationBoost;
+  g = boostedLum + (g - boostedLum) * saturationBoost;
+  b = boostedLum + (b - boostedLum) * saturationBoost;
+
+  if (shadowBoost > 0 && boostedLum < 190) {
+    const darkFactor = 1 - shadowBoost * clamp((190 - boostedLum) / 190, 0, 1);
+    r *= darkFactor;
+    g *= darkFactor;
+    b *= darkFactor;
+  }
+
+  if (neutralDarkBias > 0 && boostedLum < 165 && chroma < 78) {
+    const mix = neutralDarkBias
+      * clamp((165 - boostedLum) / 120, 0, 1)
+      * clamp((78 - chroma) / 78, 0, 1);
+    const neutral = boostedLum * 0.78;
+    r = r * (1 - mix) + neutral * mix;
+    g = g * (1 - mix) + neutral * mix;
+    b = b * (1 - mix) + neutral * mix;
+  }
+
+  return {
+    r: clamp(Math.round(r), 0, 255),
+    g: clamp(Math.round(g), 0, 255),
+    b: clamp(Math.round(b), 0, 255)
+  };
+}
+
 function resolveGridSize(sizeMode, width, height) {
   if (sizeMode === "small") return 32;
   const shortEdge = Math.min(width || 0, height || 0);
@@ -95,12 +139,13 @@ function nearestPaletteColor(target, palette) {
   return best;
 }
 
-function quantizeToPalette(rawPixels, palette = FINE_PALETTE) {
+function quantizeToPalette(rawPixels, palette = FINE_PALETTE, options = {}) {
   const safePalette = Array.isArray(palette) && palette.length ? palette : FINE_PALETTE;
   const total = Math.floor((rawPixels && rawPixels.length ? rawPixels.length : 0) / 4);
   const hexGrid = new Array(total);
   const codeGrid = new Array(total);
   const counts = Object.create(null);
+  const preserveAlphaColor = clamp(Number(options.preserveAlphaColor) || 0, 0, 0.85);
 
   for (let i = 0; i < total; i += 1) {
     const offset = i * 4;
@@ -114,15 +159,16 @@ function quantizeToPalette(rawPixels, palette = FINE_PALETTE) {
     }
 
     const alphaRatio = clamp((Number(alpha) || 0) / 255, 0, 1);
+    const effectiveAlpha = clamp(alphaRatio + (1 - alphaRatio) * preserveAlphaColor, 0, 1);
     const sourceR = Number(rawPixels[offset]) || 0;
     const sourceG = Number(rawPixels[offset + 1]) || 0;
     const sourceB = Number(rawPixels[offset + 2]) || 0;
     // Composite semi-transparent pixels over white canvas; miniapp editor stage is white-backed.
-    const sample = {
-      r: Math.round(sourceR * alphaRatio + 255 * (1 - alphaRatio)),
-      g: Math.round(sourceG * alphaRatio + 255 * (1 - alphaRatio)),
-      b: Math.round(sourceB * alphaRatio + 255 * (1 - alphaRatio))
-    };
+    const sample = tuneSampleColor({
+      r: Math.round(sourceR * effectiveAlpha + 255 * (1 - effectiveAlpha)),
+      g: Math.round(sourceG * effectiveAlpha + 255 * (1 - effectiveAlpha)),
+      b: Math.round(sourceB * effectiveAlpha + 255 * (1 - effectiveAlpha))
+    }, options);
     const nearest = nearestPaletteColor(sample, safePalette);
 
     hexGrid[i] = nearest.hex;

@@ -1,5 +1,6 @@
 {
   "setting": {
+    "urlCheck": false,
     "es6": true,
     "postcss": true,
     "minified": false,
@@ -21,7 +22,8 @@
     "localPlugins": false,
     "disableUseStrict": false,
     "swc": false,
-    "disableSWC": true
+    "disableSWC": true,
+    "useApiHook": false
   },
   "compileType": "miniprogram",
   "simulatorPluginLibVersion": {

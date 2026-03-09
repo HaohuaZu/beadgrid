@@ -16,6 +16,7 @@ const EDITOR_PALETTE_VERSION = "mard221";
 const LEGACY_FINE220_SHIFT_START = 183;
 const EDITOR_HINT_KEY = "bead_editor_gesture_hint_v1";
 const EXPORT_SETTINGS_KEY = "bead_editor_export_settings_v1";
+const PUBLISHED_PAPER_STORAGE_KEY = "bead_published_paper_library_v1";
 const REMIXICON_FONT_FAMILY = "remixicon";
 const REMIXICON_FONT_URL = "https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.ttf";
 const EXPORT_PNG_ULTRA_WIDTH = 3200;
@@ -27,6 +28,8 @@ const EDITOR_STAGE_CHECKER_LIGHT = "#F2F4F8";
 const EDITOR_STAGE_CHECKER_TILE = 18;
 const EDITOR_MIN_VISIBLE_RATIO = 0.3;
 const EDITOR_DIAG_LOG = true;
+const BLANK_CANVAS_STYLE = "空白画布";
+const PUBLISHED_PREVIEW_FILE_PREFIX = "bead_publish";
 let remixIconFontReady = false;
 const TOOL_LABELS = {
   paint: "画笔",
@@ -178,6 +181,8 @@ Page({
     showAllBeadStats: false,
     showBeadStatsOverlay: false,
     bottomSectionTab: "stats",
+    maxEdgeLocked: false,
+    maxEdgeLockReason: "",
     patternMaxEdge: 0,
     selectedEditorMaxEdge: "52",
     customEditorMaxEdge: "",
@@ -191,6 +196,15 @@ Page({
     iconFontReady: false,
     showMoveShapeOverlay: false,
     moveShapeDeltaText: "Δx 0 · Δy 0",
+    showSaveMenu: false,
+    showPublishModal: false,
+    publishBusy: false,
+    publishDraftTitle: "",
+    publishDraftTags: "",
+    publishDraftDesc: "",
+    publishAllowClone: true,
+    publishAllowExport: true,
+    publishQrLinkType: "profile",
     usedPalette: [],
     fullPalette: [],
     showExportPanel: false,
@@ -315,6 +329,15 @@ Page({
       currentToolLabel: TOOL_LABELS.move,
       eraserMode: "normal",
       showEraserMenu: false,
+      showSaveMenu: false,
+      showPublishModal: false,
+      publishBusy: false,
+      publishDraftTitle: "",
+      publishDraftTags: "",
+      publishDraftDesc: "",
+      publishAllowClone: true,
+      publishAllowExport: true,
+      publishQrLinkType: "profile",
       showGridLines: true,
       showLocatorLines: false,
       showColorCodeInEdit: false,
@@ -380,6 +403,10 @@ Page({
       this.ensureRemixIconFont();
     }, 40);
   },
+  onHide() {
+    this.flushPendingPersist();
+    this.handleCloseSaveMenu();
+  },
   onPageScroll(event) {
     this.pageScrollTop = toNumber(event && event.scrollTop, this.pageScrollTop || 0);
   },
@@ -415,12 +442,16 @@ Page({
       this.exportProgressTimer = null;
     }
     this.pageScrollTop = 0;
-    this.persistEditedWork();
+    this.flushPendingPersist();
   },
   setDataAsync(payload) {
     return new Promise((resolve) => {
       this.setData(payload, resolve);
     });
+  },
+  waitAsync(ms = 16) {
+    const delay = Math.max(0, Number(ms) || 0);
+    return new Promise((resolve) => setTimeout(resolve, delay));
   },
   normalizeVisibleBounds(rawBounds, gridSize) {
     const size = Math.max(1, Math.floor(toNumber(gridSize, 0)));
@@ -709,6 +740,49 @@ Page({
       // ignore hint storage errors
     }
   },
+  saveFileAsync(tempFilePath) {
+    return new Promise((resolve, reject) => {
+      wx.saveFile({
+        tempFilePath,
+        success: (res) => resolve((res && res.savedFilePath) || ""),
+        fail: reject
+      });
+    });
+  },
+  async ensurePersistentImagePath(path, nameHint = "") {
+    const source = typeof path === "string" ? path.trim() : "";
+    if (!source) return "";
+    if (/^https?:\/\//i.test(source)) return source;
+    if (source.includes("/usr/")) return source;
+    const cleanHint = String(nameHint || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "")
+      .slice(0, 36);
+    try {
+      const saved = await this.saveFileAsync(source);
+      return saved || source;
+    } catch (error) {
+      const userPath = wx.env && wx.env.USER_DATA_PATH ? wx.env.USER_DATA_PATH : "";
+      if (userPath) {
+        const fallbackName = `${PUBLISHED_PREVIEW_FILE_PREFIX}_${cleanHint || Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
+        const targetPath = `${userPath}/${fallbackName}`;
+        try {
+          await new Promise((resolve, reject) => {
+            wx.getFileSystemManager().copyFile({
+              srcPath: source,
+              destPath: targetPath,
+              success: resolve,
+              fail: reject
+            });
+          });
+          return targetPath;
+        } catch (copyError) {
+          console.warn("persist publish preview by copy failed", copyError);
+        }
+      }
+      console.warn("persist publish preview failed", error);
+      return source;
+    }
+  },
   syncHistoryState() {
     const undoCount = this.undoStack.length;
     const redoCount = this.redoStack.length;
@@ -727,6 +801,109 @@ Page({
   closeEraserMenu() {
     if (this.data.showEraserMenu) {
       this.setData({ showEraserMenu: false });
+    }
+  },
+  handleCloseSaveMenu() {
+    if (this.data.showSaveMenu) {
+      this.setData({ showSaveMenu: false });
+    }
+  },
+  flushPendingPersist(gridImagePath = "") {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    if (!this.data.hasEditableGrid || !this.data.workId) return false;
+    this.persistEditedWork(gridImagePath);
+    return true;
+  },
+  normalizePublishTitle(title) {
+    const safe = String(title || "")
+      .replace(/[\\/:*?"<>|]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!safe) return "";
+    return safe.length > 20 ? safe.slice(0, 20) : safe;
+  },
+  normalizePublishTags(tags) {
+    const list = String(tags || "")
+      .split(/[\n,，/|｜\s]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const unique = [];
+    list.forEach((item) => {
+      const safe = item.slice(0, 12);
+      if (!safe) return;
+      if (unique.includes(safe)) return;
+      unique.push(safe);
+    });
+    return unique.slice(0, 6);
+  },
+  normalizePublishDescription(desc) {
+    const safe = String(desc || "").replace(/\r/g, "").trim();
+    return safe.length > 300 ? safe.slice(0, 300) : safe;
+  },
+  openPublishModal() {
+    if (!this.data.hasEditableGrid || !this.data.workId) {
+      wx.showToast({ title: "暂无可发布的作品", icon: "none" });
+      return;
+    }
+    const currentWork = this.getCurrentWorkRecord() || {};
+    const publishedList = this.readPublishedPaperLibrary();
+    const existingRecord = publishedList.find((item) => item && item.sourceWorkId === this.data.workId);
+    const existingMeta = existingRecord && existingRecord.publishMeta && typeof existingRecord.publishMeta === "object"
+      ? existingRecord.publishMeta
+      : {};
+    const title = this.normalizePublishTitle(existingMeta.title || currentWork.title || this.data.workName);
+    const tags = Array.isArray(existingMeta.tags)
+      ? existingMeta.tags.join(" ")
+      : String(existingMeta.tagsText || "");
+    const description = this.normalizePublishDescription(existingMeta.description || "");
+    this.setData({
+      showPublishModal: true,
+      publishBusy: false,
+      publishDraftTitle: title,
+      publishDraftTags: tags,
+      publishDraftDesc: description,
+      publishAllowClone: existingMeta.allowClone !== false,
+      publishAllowExport: existingMeta.allowExport !== false,
+      publishQrLinkType: existingMeta.qrLinkType === "none" ? "none" : "profile"
+    });
+  },
+  handleClosePublishModal() {
+    if (this.data.publishBusy) return;
+    if (this.data.showPublishModal) {
+      this.setData({ showPublishModal: false });
+    }
+  },
+  handlePublishTitleInput(event) {
+    this.setData({
+      publishDraftTitle: this.normalizePublishTitle(event && event.detail ? event.detail.value : "")
+    });
+  },
+  handlePublishTagsInput(event) {
+    const raw = String(event && event.detail ? event.detail.value : "");
+    const compact = raw.replace(/\s+/g, " ").trimStart();
+    this.setData({ publishDraftTags: compact.slice(0, 80) });
+  },
+  handlePublishDescInput(event) {
+    this.setData({
+      publishDraftDesc: this.normalizePublishDescription(event && event.detail ? event.detail.value : "")
+    });
+  },
+  handlePublishToggle(event) {
+    const field = event && event.currentTarget && event.currentTarget.dataset
+      ? String(event.currentTarget.dataset.field || "")
+      : "";
+    const value = event && event.currentTarget && event.currentTarget.dataset
+      ? event.currentTarget.dataset.value
+      : "";
+    if (field === "publishAllowClone" || field === "publishAllowExport") {
+      this.setData({ [field]: value !== "false" });
+      return;
+    }
+    if (field === "publishQrLinkType" && (value === "none" || value === "profile")) {
+      this.setData({ publishQrLinkType: value });
     }
   },
   handleTopUndo() {
@@ -1089,7 +1266,13 @@ Page({
       exportCanvasSize: Math.max(safeWidth, safeHeight),
       exportCanvasWidth: safeWidth,
       exportCanvasHeight: safeHeight
-    });
+    }).then(() => new Promise((resolve) => {
+      if (typeof wx.nextTick === "function") {
+        wx.nextTick(resolve);
+        return;
+      }
+      setTimeout(resolve, 0);
+    })).then(() => this.waitAsync(24));
   },
   canvasToTempFileAsync(canvasId, width, height) {
     return new Promise((resolve, reject) => {
@@ -1161,6 +1344,505 @@ Page({
       return Number.isFinite(mapped) ? mapped : 0;
     });
   },
+  collectDominantBorderColors(rawPixels, width, height) {
+    const safeWidth = Math.max(1, Math.floor(width));
+    const safeHeight = Math.max(1, Math.floor(height));
+    const counter = Object.create(null);
+    let total = 0;
+
+    const pushOffset = (offset) => {
+      const alpha = Number(rawPixels[offset + 3]) || 0;
+      if (alpha <= 0) return;
+      const r = Number(rawPixels[offset]) || 0;
+      const g = Number(rawPixels[offset + 1]) || 0;
+      const b = Number(rawPixels[offset + 2]) || 0;
+      const key = `${Math.floor(r / 24)}_${Math.floor(g / 24)}_${Math.floor(b / 24)}`;
+      const record = counter[key] || { count: 0, sumR: 0, sumG: 0, sumB: 0 };
+      record.count += 1;
+      record.sumR += r;
+      record.sumG += g;
+      record.sumB += b;
+      counter[key] = record;
+      total += 1;
+    };
+
+    for (let x = 0; x < safeWidth; x += 1) {
+      pushOffset(x * 4);
+      pushOffset(((safeHeight - 1) * safeWidth + x) * 4);
+    }
+    for (let y = 1; y < safeHeight - 1; y += 1) {
+      pushOffset((y * safeWidth) * 4);
+      pushOffset((y * safeWidth + (safeWidth - 1)) * 4);
+    }
+
+    const entries = Object.keys(counter)
+      .map((key) => {
+        const record = counter[key];
+        return {
+          count: record.count,
+          r: record.sumR / Math.max(1, record.count),
+          g: record.sumG / Math.max(1, record.count),
+          b: record.sumB / Math.max(1, record.count)
+        };
+      })
+      .sort((a, b) => b.count - a.count);
+
+    if (!entries.length) {
+      return { colors: [{ r: 255, g: 255, b: 255 }], spread: 0 };
+    }
+
+    const picked = [];
+    let covered = 0;
+    const minCount = Math.max(2, Math.floor(total * 0.035));
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i];
+      if (picked.length >= 6) break;
+      if (picked.length > 0 && entry.count < minCount) break;
+      const duplicate = picked.some((item) => distanceSqRgb(item, entry) <= 28 * 28);
+      if (duplicate) continue;
+      picked.push(entry);
+      covered += entry.count;
+      if (covered >= total * 0.82) break;
+    }
+    if (!picked.length) picked.push(entries[0]);
+
+    let spreadWeighted = 0;
+    let spreadWeight = 0;
+    entries.slice(0, Math.min(16, entries.length)).forEach((entry) => {
+      let nearest = Number.POSITIVE_INFINITY;
+      picked.forEach((item) => {
+        const dist = Math.sqrt(distanceSqRgb(item, entry));
+        if (dist < nearest) nearest = dist;
+      });
+      spreadWeighted += nearest * entry.count;
+      spreadWeight += entry.count;
+    });
+
+    return {
+      colors: picked.map((item) => ({ r: item.r, g: item.g, b: item.b })),
+      spread: spreadWeight > 0 ? (spreadWeighted / spreadWeight) : 0
+    };
+  },
+  detectForegroundRegionFromRawPixels(rawPixels, width, height) {
+    const safeWidth = Math.max(1, Math.floor(width));
+    const safeHeight = Math.max(1, Math.floor(height));
+    const total = safeWidth * safeHeight;
+    if (!(rawPixels instanceof Uint8ClampedArray) || rawPixels.length < total * 4) {
+      return null;
+    }
+
+    const borderModel = this.collectDominantBorderColors(rawPixels, safeWidth, safeHeight);
+    const prototypes = Array.isArray(borderModel && borderModel.colors) && borderModel.colors.length
+      ? borderModel.colors
+      : [{ r: 255, g: 255, b: 255 }];
+    const spread = Number(borderModel && borderModel.spread) || 0;
+    const prototypeThresholdSq = Math.pow(28 + Math.min(24, spread * 0.65), 2);
+    const directLinkThresholdSq = Math.pow(18 + Math.min(18, spread * 0.45), 2);
+    const backgroundLinkThresholdSq = Math.pow(30 + Math.min(24, spread * 0.55), 2);
+    const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+    const nearestPrototypeSq = new Float32Array(total);
+    const luminance = new Float32Array(total);
+
+    for (let idx = 0; idx < total; idx += 1) {
+      const offset = idx * 4;
+      const r = Number(rawPixels[offset]) || 0;
+      const g = Number(rawPixels[offset + 1]) || 0;
+      const b = Number(rawPixels[offset + 2]) || 0;
+      luminance[idx] = toLum(r, g, b);
+      let nearest = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < prototypes.length; i += 1) {
+        const item = prototypes[i];
+        const dr = r - item.r;
+        const dg = g - item.g;
+        const db = b - item.b;
+        const dist = dr * dr + dg * dg + db * db;
+        if (dist < nearest) nearest = dist;
+      }
+      nearestPrototypeSq[idx] = nearest;
+    }
+
+    const isBackgroundSeed = (idx) => nearestPrototypeSq[idx] <= prototypeThresholdSq;
+    const colorDistanceSq = (leftIndex, rightIndex) => {
+      const leftOffset = leftIndex * 4;
+      const rightOffset = rightIndex * 4;
+      const dr = rawPixels[leftOffset] - rawPixels[rightOffset];
+      const dg = rawPixels[leftOffset + 1] - rawPixels[rightOffset + 1];
+      const db = rawPixels[leftOffset + 2] - rawPixels[rightOffset + 2];
+      return dr * dr + dg * dg + db * db;
+    };
+
+    const visitedBackground = new Uint8Array(total);
+    const queue = new Int32Array(total);
+    let head = 0;
+    let tail = 0;
+    const trySeed = (x, y) => {
+      if (x < 0 || y < 0 || x >= safeWidth || y >= safeHeight) return;
+      const idx = y * safeWidth + x;
+      if (visitedBackground[idx] || !isBackgroundSeed(idx)) return;
+      visitedBackground[idx] = 1;
+      queue[tail++] = idx;
+    };
+
+    for (let x = 0; x < safeWidth; x += 1) {
+      trySeed(x, 0);
+      trySeed(x, safeHeight - 1);
+    }
+    for (let y = 1; y < safeHeight - 1; y += 1) {
+      trySeed(0, y);
+      trySeed(safeWidth - 1, y);
+    }
+
+    while (head < tail) {
+      const current = queue[head++];
+      const currentNearBorder = nearestPrototypeSq[current] <= prototypeThresholdSq * 1.12;
+      const currentLum = luminance[current];
+      const x = current % safeWidth;
+      const y = Math.floor(current / safeWidth);
+      const pushNeighbor = (nx, ny) => {
+        if (nx < 0 || ny < 0 || nx >= safeWidth || ny >= safeHeight) return;
+        const next = ny * safeWidth + nx;
+        if (visitedBackground[next]) return;
+        const linkDistance = colorDistanceSq(current, next);
+        const nextNearBorder = nearestPrototypeSq[next] <= prototypeThresholdSq * 1.18;
+        const lumDiff = Math.abs(currentLum - luminance[next]);
+        const canExpand = (
+          (nextNearBorder && linkDistance <= backgroundLinkThresholdSq)
+          || (currentNearBorder && linkDistance <= directLinkThresholdSq)
+          || (currentNearBorder && nextNearBorder && lumDiff <= 18 && linkDistance <= backgroundLinkThresholdSq * 1.28)
+        );
+        if (!canExpand) return;
+        visitedBackground[next] = 1;
+        queue[tail++] = next;
+      };
+      pushNeighbor(x - 1, y);
+      pushNeighbor(x + 1, y);
+      pushNeighbor(x, y - 1);
+      pushNeighbor(x, y + 1);
+    }
+
+    const foregroundMask = new Uint8Array(total);
+    const visitedForeground = new Uint8Array(total);
+    const componentQueue = new Int32Array(total);
+    const minKeepCount = Math.max(4, Math.floor(total * 0.00045));
+    let keptCount = 0;
+    let minX = safeWidth;
+    let minY = safeHeight;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let start = 0; start < total; start += 1) {
+      if (visitedBackground[start] || visitedForeground[start]) continue;
+      let compHead = 0;
+      let compTail = 0;
+      const pixels = [];
+      componentQueue[compTail++] = start;
+      visitedForeground[start] = 1;
+      let count = 0;
+      let compMinX = safeWidth;
+      let compMinY = safeHeight;
+      let compMaxX = -1;
+      let compMaxY = -1;
+      let touchesBorder = false;
+
+      while (compHead < compTail) {
+        const current = componentQueue[compHead++];
+        pixels.push(current);
+        count += 1;
+        const y = Math.floor(current / safeWidth);
+        const x = current - y * safeWidth;
+        if (x === 0 || y === 0 || x === safeWidth - 1 || y === safeHeight - 1) touchesBorder = true;
+        if (x < compMinX) compMinX = x;
+        if (y < compMinY) compMinY = y;
+        if (x > compMaxX) compMaxX = x;
+        if (y > compMaxY) compMaxY = y;
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= safeWidth || ny >= safeHeight) continue;
+            const next = ny * safeWidth + nx;
+            if (visitedBackground[next] || visitedForeground[next]) continue;
+            visitedForeground[next] = 1;
+            componentQueue[compTail++] = next;
+          }
+        }
+      }
+
+      const keepComponent = count >= minKeepCount || (!touchesBorder && count >= 3 && (compMaxX > compMinX || compMaxY > compMinY));
+      if (!keepComponent) continue;
+
+      keptCount += count;
+      if (compMinX < minX) minX = compMinX;
+      if (compMinY < minY) minY = compMinY;
+      if (compMaxX > maxX) maxX = compMaxX;
+      if (compMaxY > maxY) maxY = compMaxY;
+      pixels.forEach((idx) => {
+        foregroundMask[idx] = 1;
+      });
+    }
+
+    if (keptCount <= 0 || maxX < minX || maxY < minY) return null;
+
+    const backgroundMask = new Uint8Array(total);
+    for (let idx = 0; idx < total; idx += 1) {
+      backgroundMask[idx] = foregroundMask[idx] ? 0 : 1;
+    }
+
+    return {
+      backgroundMask,
+      bounds: {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        width: maxX - minX + 1,
+        height: maxY - minY + 1
+      }
+    };
+  },
+  resampleRgbaRegionToTarget(rawPixels, sourceWidth, sourceHeight, bounds, targetWidth, targetHeight, options = {}) {
+    const safeTargetW = Math.max(1, Math.floor(targetWidth));
+    const safeTargetH = Math.max(1, Math.floor(targetHeight));
+    const safeSourceW = Math.max(1, Math.floor(sourceWidth));
+    const safeSourceH = Math.max(1, Math.floor(sourceHeight));
+    const out = new Uint8ClampedArray(safeTargetW * safeTargetH * 4);
+    const backgroundMask = options && options.backgroundMask instanceof Uint8Array
+      ? options.backgroundMask
+      : null;
+    const safeBounds = bounds || { minX: 0, minY: 0, width: safeSourceW, height: safeSourceH };
+    const minX = clamp(Math.floor(safeBounds.minX || 0), 0, safeSourceW - 1);
+    const minY = clamp(Math.floor(safeBounds.minY || 0), 0, safeSourceH - 1);
+    const regionW = clamp(Math.floor(safeBounds.width || safeSourceW), 1, safeSourceW - minX);
+    const regionH = clamp(Math.floor(safeBounds.height || safeSourceH), 1, safeSourceH - minY);
+    const white = 255;
+    const smallTargetBoost = Math.max(0, (40 - Math.max(safeTargetW, safeTargetH)) / 18);
+    const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+    const sampleColorAt = (sx, sy) => {
+      const clampedX = clamp(Math.floor(sx), 0, safeSourceW - 1);
+      const clampedY = clamp(Math.floor(sy), 0, safeSourceH - 1);
+      const offset = (clampedY * safeSourceW + clampedX) * 4;
+      const a = clamp((Number(rawPixels[offset + 3]) || 0) / 255, 0, 1);
+      const r = Number(rawPixels[offset]) || 0;
+      const g = Number(rawPixels[offset + 1]) || 0;
+      const b = Number(rawPixels[offset + 2]) || 0;
+      return {
+        r: r * a + white * (1 - a),
+        g: g * a + white * (1 - a),
+        b: b * a + white * (1 - a)
+      };
+    };
+
+    for (let y = 0; y < safeTargetH; y += 1) {
+      const sy0 = minY + (y * regionH / safeTargetH);
+      const sy1 = minY + ((y + 1) * regionH / safeTargetH);
+      const yStart = Math.floor(sy0);
+      let yEnd = Math.ceil(sy1) - 1;
+      if (yEnd < yStart) yEnd = yStart;
+      for (let x = 0; x < safeTargetW; x += 1) {
+        const sx0 = minX + (x * regionW / safeTargetW);
+        const sx1 = minX + ((x + 1) * regionW / safeTargetW);
+        const xStart = Math.floor(sx0);
+        let xEnd = Math.ceil(sx1) - 1;
+        if (xEnd < xStart) xEnd = xStart;
+
+        let sumW = 0;
+        let totalWeight = 0;
+        let sumCoverage = 0;
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let minLum = 255;
+        let maxLum = 0;
+        let darkestColor = null;
+        let brightestColor = null;
+
+        for (let sy = yStart; sy <= yEnd; sy += 1) {
+          if (sy < 0 || sy >= safeSourceH) continue;
+          for (let sx = xStart; sx <= xEnd; sx += 1) {
+            if (sx < 0 || sx >= safeSourceW) continue;
+            const overlapX = Math.max(0, Math.min(sx + 1, sx1) - Math.max(sx, sx0));
+            const overlapY = Math.max(0, Math.min(sy + 1, sy1) - Math.max(sy, sy0));
+            const weight = overlapX * overlapY;
+            if (weight <= 0) continue;
+            totalWeight += weight;
+            if (backgroundMask && backgroundMask[sy * safeSourceW + sx]) continue;
+            const offset = (sy * safeSourceW + sx) * 4;
+            const a = clamp((Number(rawPixels[offset + 3]) || 0) / 255, 0, 1);
+            const r = Number(rawPixels[offset]) || 0;
+            const g = Number(rawPixels[offset + 1]) || 0;
+            const b = Number(rawPixels[offset + 2]) || 0;
+            const cr = r * a + white * (1 - a);
+            const cg = g * a + white * (1 - a);
+            const cb = b * a + white * (1 - a);
+            const lum = toLum(cr, cg, cb);
+            const effectiveWeight = weight * a;
+            sumCoverage += effectiveWeight;
+            sumW += effectiveWeight;
+            sumR += cr * effectiveWeight;
+            sumG += cg * effectiveWeight;
+            sumB += cb * effectiveWeight;
+            if (lum < minLum) {
+              minLum = lum;
+              darkestColor = { r: cr, g: cg, b: cb, lum };
+            }
+            if (lum > maxLum) {
+              maxLum = lum;
+              brightestColor = { r: cr, g: cg, b: cb, lum };
+            }
+          }
+        }
+
+        const outOffset = (y * safeTargetW + x) * 4;
+        if (sumW <= 1e-7 || totalWeight <= 1e-7) {
+          out[outOffset] = 255;
+          out[outOffset + 1] = 255;
+          out[outOffset + 2] = 255;
+          out[outOffset + 3] = 0;
+          continue;
+        }
+
+        let outR = sumR / sumW;
+        let outG = sumG / sumW;
+        let outB = sumB / sumW;
+        if (smallTargetBoost > 0 && darkestColor && brightestColor) {
+          const repLum = toLum(outR, outG, outB);
+          const contrast = maxLum - minLum;
+          const centerColor = sampleColorAt((sx0 + sx1) / 2, (sy0 + sy1) / 2);
+          const centerLum = toLum(centerColor.r, centerColor.g, centerColor.b);
+          const centerDelta = Math.abs(centerLum - repLum);
+          if (contrast >= 18 && centerDelta >= 10) {
+            const focus = clamp(
+              0.1 + smallTargetBoost * 0.12 + ((centerDelta - 10) / 42) * 0.12 + ((contrast - 18) / 48) * 0.08,
+              0.08,
+              0.32
+            );
+            outR = outR * (1 - focus) + centerColor.r * focus;
+            outG = outG * (1 - focus) + centerColor.g * focus;
+            outB = outB * (1 - focus) + centerColor.b * focus;
+          } else if (contrast >= 22) {
+            const darkGap = repLum - darkestColor.lum;
+            const lightGap = brightestColor.lum - repLum;
+            if (lightGap >= 16) {
+              const focus = clamp(0.06 + smallTargetBoost * 0.1 + ((lightGap - 16) / 40) * 0.08, 0.05, 0.2);
+              outR = outR * (1 - focus) + brightestColor.r * focus;
+              outG = outG * (1 - focus) + brightestColor.g * focus;
+              outB = outB * (1 - focus) + brightestColor.b * focus;
+            } else if (darkGap >= 16) {
+              const focus = clamp(0.06 + smallTargetBoost * 0.1 + ((darkGap - 16) / 40) * 0.08, 0.05, 0.2);
+              outR = outR * (1 - focus) + darkestColor.r * focus;
+              outG = outG * (1 - focus) + darkestColor.g * focus;
+              outB = outB * (1 - focus) + darkestColor.b * focus;
+            }
+          }
+        }
+
+        out[outOffset] = clamp(Math.round(outR), 0, 255);
+        out[outOffset + 1] = clamp(Math.round(outG), 0, 255);
+        out[outOffset + 2] = clamp(Math.round(outB), 0, 255);
+        out[outOffset + 3] = clamp(Math.round((sumCoverage / totalWeight) * 255), 0, 255);
+      }
+    }
+    return out;
+  },
+  enhanceFinePixelClarity(rawPixels, width, height) {
+    const safeWidth = Math.max(1, Math.floor(width));
+    const safeHeight = Math.max(1, Math.floor(height));
+    if (!(rawPixels instanceof Uint8ClampedArray) || rawPixels.length < safeWidth * safeHeight * 4) {
+      return rawPixels;
+    }
+    const output = new Uint8ClampedArray(rawPixels);
+    const toLum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+    const smallGridBoost = Math.max(0, (72 - Math.max(safeWidth, safeHeight)) / 72);
+    const baseSharpen = 0.16 + smallGridBoost * 0.12;
+    const extraSharpen = 0.24 + smallGridBoost * 0.14;
+    const contrastBoost = 1.04 + smallGridBoost * 0.06;
+    const saturationBoost = 1.03 + smallGridBoost * 0.05;
+
+    for (let y = 0; y < safeHeight; y += 1) {
+      for (let x = 0; x < safeWidth; x += 1) {
+        const offset = (y * safeWidth + x) * 4;
+        const alpha = Number(rawPixels[offset + 3]) || 0;
+        if (alpha <= 0) continue;
+        const baseR = Number(rawPixels[offset]) || 0;
+        const baseG = Number(rawPixels[offset + 1]) || 0;
+        const baseB = Number(rawPixels[offset + 2]) || 0;
+        const baseLum = toLum(baseR, baseG, baseB);
+        const baseChroma = Math.max(baseR, baseG, baseB) - Math.min(baseR, baseG, baseB);
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        let sumWeight = 0;
+        let nearWhiteWeight = 0;
+
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const ny = y + dy;
+          if (ny < 0 || ny >= safeHeight) continue;
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = x + dx;
+            if (nx < 0 || nx >= safeWidth) continue;
+            if (dx === 0 && dy === 0) continue;
+            const nOffset = (ny * safeWidth + nx) * 4;
+            const nAlpha = Number(rawPixels[nOffset + 3]) || 0;
+            if (nAlpha <= 0) continue;
+            const weight = dx === 0 || dy === 0 ? 1 : 0.72;
+            const nr = Number(rawPixels[nOffset]) || 0;
+            const ng = Number(rawPixels[nOffset + 1]) || 0;
+            const nb = Number(rawPixels[nOffset + 2]) || 0;
+            sumR += nr * weight;
+            sumG += ng * weight;
+            sumB += nb * weight;
+            sumWeight += weight;
+            const nLum = toLum(nr, ng, nb);
+            const nChroma = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
+            if (nLum >= 242 && nChroma <= 20) nearWhiteWeight += weight;
+          }
+        }
+
+        if (sumWeight <= 0) continue;
+        const avgR = sumR / sumWeight;
+        const avgG = sumG / sumWeight;
+        const avgB = sumB / sumWeight;
+        const avgLum = toLum(avgR, avgG, avgB);
+        const lumContrast = Math.abs(baseLum - avgLum);
+        const detailScore = clamp((lumContrast - 5) / 34, 0, 1);
+
+        if (baseLum >= 243 && avgLum >= 243 && lumContrast <= 4) {
+          output[offset] = 255;
+          output[offset + 1] = 255;
+          output[offset + 2] = 255;
+          output[offset + 3] = 255;
+          continue;
+        }
+        if (nearWhiteWeight >= sumWeight * 0.78 && baseLum >= 236 && detailScore < 0.2) {
+          output[offset] = 255;
+          output[offset + 1] = 255;
+          output[offset + 2] = 255;
+          output[offset + 3] = 255;
+          continue;
+        }
+
+        const sharpen = clamp(baseSharpen + detailScore * extraSharpen, 0.12, 0.52);
+        let nextR = baseR + (baseR - avgR) * sharpen;
+        let nextG = baseG + (baseG - avgG) * sharpen;
+        let nextB = baseB + (baseB - avgB) * sharpen;
+        const localContrastGain = 1 + detailScore * (contrastBoost - 1);
+        nextR = (nextR - 128) * localContrastGain + 128;
+        nextG = (nextG - 128) * localContrastGain + 128;
+        nextB = (nextB - 128) * localContrastGain + 128;
+        const nextLum = toLum(nextR, nextG, nextB);
+        const satGain = saturationBoost + (baseChroma <= 42 ? 0.03 : 0);
+        nextR = nextLum + (nextR - nextLum) * satGain;
+        nextG = nextLum + (nextG - nextLum) * satGain;
+        nextB = nextLum + (nextB - nextLum) * satGain;
+        output[offset] = clamp(Math.round(nextR), 0, 255);
+        output[offset + 1] = clamp(Math.round(nextG), 0, 255);
+        output[offset + 2] = clamp(Math.round(nextB), 0, 255);
+        output[offset + 3] = 255;
+      }
+    }
+    return output;
+  },
   async buildResizeSourceFromImage(imagePath, targetMaxEdge) {
     if (!imagePath) return null;
     const effectiveTarget = clamp(parseInt(targetMaxEdge, 10) || 0, MIN_PATTERN_EDGE, MAX_PATTERN_EDGE);
@@ -1219,26 +1901,21 @@ Page({
       ctx.drawImage(imagePath, rect.drawX, rect.drawY, rect.drawWidth, rect.drawHeight);
     });
     const sampled = await this.canvasGetImageDataAsync("exportCanvas", processingEdge, processingEdge);
-    const quantized = quantizeToPalette(sampled.data);
-    const sourceGrid = quantized.hexGrid.map((hex) => {
-      const key = String(hex || "").toUpperCase();
-      const mapped = this.paletteIndexByHex[key];
-      return Number.isFinite(mapped) ? mapped : 0;
-    });
-    const sourceMaster = this.buildResizeSourceFromGrid(sourceGrid, processingEdge);
-    const sourceRectGrid = sourceMaster && Array.isArray(sourceMaster.rectGrid) && sourceMaster.rectGrid.length
-      ? sourceMaster.rectGrid
-      : sourceGrid;
-    const sourceRectW = sourceMaster && Number(sourceMaster.width) > 0
-      ? Number(sourceMaster.width)
-      : processingEdge;
-    const sourceRectH = sourceMaster && Number(sourceMaster.height) > 0
-      ? Number(sourceMaster.height)
-      : processingEdge;
-    const bgIndex = sourceMaster && Number.isFinite(sourceMaster.bgIndex)
-      ? sourceMaster.bgIndex
-      : this.getDominantBorderIndex(sourceGrid, processingEdge);
-    const ratio = sourceRectW / Math.max(1, sourceRectH);
+    const rectMinCol = clamp(Math.floor(rect.drawX), 0, processingEdge - 1);
+    const rectMinRow = clamp(Math.floor(rect.drawY), 0, processingEdge - 1);
+    const rectMaxCol = clamp(Math.ceil(rect.drawX + rect.drawWidth) - 1, rectMinCol, processingEdge - 1);
+    const rectMaxRow = clamp(Math.ceil(rect.drawY + rect.drawHeight) - 1, rectMinRow, processingEdge - 1);
+    const wholeImportBounds = {
+      minX: rectMinCol,
+      minY: rectMinRow,
+      maxX: rectMaxCol,
+      maxY: rectMaxRow,
+      width: Math.max(1, rectMaxCol - rectMinCol + 1),
+      height: Math.max(1, rectMaxRow - rectMinRow + 1)
+    };
+    const initialBounds = wholeImportBounds;
+    const bgIndex = this.getBackgroundFillIndex();
+    const ratio = initialBounds.width / Math.max(1, initialBounds.height);
     let targetW;
     let targetH;
     if (ratio >= 1) {
@@ -1255,15 +1932,24 @@ Page({
       width: targetW,
       height: targetH
     };
-
-    const rectScaled = this.resampleIndexGridSmart(
-      sourceRectGrid,
-      sourceRectW,
-      sourceRectH,
+    const rawTargetPixels = this.resampleRgbaRegionToTarget(
+      sampled.data,
+      processingEdge,
+      processingEdge,
+      initialBounds,
       targetW,
       targetH,
-      bgIndex
+      {
+        backgroundMask: null
+      }
     );
+    const preparedTargetPixels = this.enhanceFinePixelClarity(rawTargetPixels, targetW, targetH);
+    const quantized = quantizeToPalette(preparedTargetPixels);
+    const rectScaled = quantized.hexGrid.map((hex) => {
+      const key = String(hex || "").toUpperCase();
+      const mapped = this.paletteIndexByHex[key];
+      return Number.isFinite(mapped) ? mapped : bgIndex;
+    });
     const total = nextGridSize * nextGridSize;
     const output = new Array(total).fill(bgIndex);
     const offsetX = Math.floor((nextGridSize - targetW) / 2);
@@ -1398,6 +2084,183 @@ Page({
       console.warn("write work library failed", error);
     }
   },
+  getCurrentWorkRecord() {
+    if (!this.data.workId) return null;
+    const workLibrary = this.readWorkLibrary();
+    return workLibrary.find((item) => item && item.id === this.data.workId) || null;
+  },
+  readPublishedPaperLibrary() {
+    try {
+      const stored = wx.getStorageSync(PUBLISHED_PAPER_STORAGE_KEY);
+      return Array.isArray(stored) ? stored : [];
+    } catch (error) {
+      console.warn("read published paper library failed", error);
+      return [];
+    }
+  },
+  writePublishedPaperLibrary(list) {
+    const safeList = Array.isArray(list) ? list : [];
+    try {
+      wx.setStorageSync(PUBLISHED_PAPER_STORAGE_KEY, safeList);
+    } catch (error) {
+      console.warn("write published paper library failed", error);
+    }
+  },
+  resolvePublishDifficulty(sizeText = "") {
+    const edge = parseGridSizeFromText(sizeText) || this.gridSize || 0;
+    if (edge <= 36) return "入门";
+    if (edge <= 72) return "进阶";
+    return "高阶";
+  },
+  resolvePublishScene(styleText = "") {
+    if (String(styleText || "").includes("Q版")) return "Q版创作";
+    if (String(styleText || "") === BLANK_CANVAS_STYLE) return "自由创作";
+    return "AI创作";
+  },
+  resolvePublishTone(sizeText = "") {
+    const edge = parseGridSizeFromText(sizeText) || this.gridSize || 0;
+    if (edge <= 36) return "pink";
+    if (edge <= 72) return "orange";
+    return "gold";
+  },
+  buildPublishTheme(workName = "") {
+    const safeName = String(workName || "").trim();
+    if (!safeName) return "自定义";
+    return safeName.length <= 4 ? safeName : safeName.slice(0, 4);
+  },
+  getGridPreviewCellSize(width, height, withGridLines = false) {
+    const baseCell = withGridLines ? 12 : 10;
+    const maxEdge = Math.max(1, Math.floor(Math.max(width, height)));
+    const maxCanvasEdge = withGridLines ? 2200 : 1800;
+    const maxCell = Math.max(1, Math.floor(maxCanvasEdge / maxEdge));
+    return clamp(baseCell, 8, maxCell);
+  },
+  async renderGridPreviewImage(options = {}) {
+    if (!this.gridSize || !this.gridIndexes.length) return "";
+    const withGridLines = Boolean(options.withGridLines);
+    const bounds = Boolean(options.cropToContent)
+      ? (this.buildVisibleBoundsAroundContent(
+        this.computeGridContentBoundsStrict(this.gridIndexes, this.gridSize)
+          || this.computeGridContentBounds(this.gridIndexes, this.gridSize),
+        null,
+        null,
+        this.gridSize
+      ) || this.getDisplayBounds())
+      : this.getDisplayBounds();
+    const width = Math.max(1, bounds.maxCol - bounds.minCol + 1);
+    const height = Math.max(1, bounds.maxRow - bounds.minRow + 1);
+    const cellSize = this.getGridPreviewCellSize(width, height, withGridLines);
+    const canvasWidth = width * cellSize;
+    const canvasHeight = height * cellSize;
+    await this.updateExportCanvasSizeAsync(canvasWidth, canvasHeight);
+    await this.drawCanvasAsync("exportCanvas", (ctx) => {
+      ctx.setFillStyle("#FFFFFF");
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      for (let row = 0; row < height; row += 1) {
+        for (let col = 0; col < width; col += 1) {
+          const srcIndex = (bounds.minRow + row) * this.gridSize + (bounds.minCol + col);
+          ctx.setFillStyle(this.cellColorByIndex(this.gridIndexes[srcIndex]));
+          ctx.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+        }
+      }
+      if (withGridLines) {
+        for (let i = 0; i <= width; i += 1) {
+          const pos = i * cellSize;
+          const major = i % 5 === 0;
+          ctx.beginPath();
+          ctx.setLineWidth(major ? 1.6 : 0.9);
+          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.58)" : "rgba(15, 23, 42, 0.28)");
+          ctx.moveTo(pos, 0);
+          ctx.lineTo(pos, canvasHeight);
+          ctx.stroke();
+        }
+        for (let i = 0; i <= height; i += 1) {
+          const pos = i * cellSize;
+          const major = i % 5 === 0;
+          ctx.beginPath();
+          ctx.setLineWidth(major ? 1.6 : 0.9);
+          ctx.setStrokeStyle(major ? "rgba(15, 23, 42, 0.58)" : "rgba(15, 23, 42, 0.28)");
+          ctx.moveTo(0, pos);
+          ctx.lineTo(canvasWidth, pos);
+          ctx.stroke();
+        }
+      }
+    });
+    const tempPath = await this.canvasToTempFileAsync("exportCanvas", canvasWidth, canvasHeight);
+    return this.ensurePersistentImagePath(
+      tempPath,
+      `${this.data.workId || "work"}_${withGridLines ? "grid" : "publish"}`
+    );
+  },
+  async buildPublishPreviewImage() {
+    return this.renderGridPreviewImage({
+      withGridLines: false,
+      cropToContent: true
+    });
+  },
+  buildPublishedPaperRecord(work, existingRecord, previewImage = "") {
+    const source = work || {};
+    const sizeText = String(source.size || this.getPatternSizeText().replace("×", "x") || `${this.gridSize}x${this.gridSize}`);
+    const usedColorIndexes = Array.isArray(source.editorData && source.editorData.usedColorIndexes)
+      ? source.editorData.usedColorIndexes
+      : this.computeUsedColorIndexes();
+    const now = Date.now();
+    const tags = this.normalizePublishTags(this.data.publishDraftTags);
+    const description = this.normalizePublishDescription(this.data.publishDraftDesc);
+    const publishTitle = this.normalizePublishTitle(this.data.publishDraftTitle) || source.title || this.data.workName || "未命名图纸";
+    return {
+      id: existingRecord && existingRecord.id ? existingRecord.id : `pub-${source.id || now}`,
+      sourceWorkId: source.id || this.data.workId || "",
+      workId: source.id || this.data.workId || "",
+      title: publishTitle,
+      author: "我的发布",
+      avatarText: "我",
+      size: sizeText,
+      colorCount: usedColorIndexes.length,
+      difficulty: this.resolvePublishDifficulty(sizeText),
+      scene: this.resolvePublishScene(source.style),
+      audience: BLANK_CANVAS_STYLE === source.style
+        ? ["拼豆小白", "手工爱好者"]
+        : ["手工爱好者"],
+      theme: tags[0] || this.buildPublishTheme(publishTitle),
+      hot: false,
+      views: Number(existingRecord && existingRecord.views) || 0,
+      clones: Number(existingRecord && existingRecord.clones) || 0,
+      likes: Number(existingRecord && existingRecord.likes) || 0,
+      favorites: Number(existingRecord && existingRecord.favorites) || 0,
+      official: false,
+      createdAt: Number(existingRecord && existingRecord.createdAt) || now,
+      publishedAt: now,
+      tone: this.resolvePublishTone(sizeText),
+      previewImage: previewImage || String(existingRecord && existingRecord.previewImage || ""),
+      beadEstimate: source && source.beadEstimate
+        ? {
+          total: Number(source.beadEstimate.total) || 0,
+          colorUsed: Number(source.beadEstimate.colorUsed) || 0
+        }
+        : null,
+      editorData: source && source.editorData
+        ? {
+          ...source.editorData
+        }
+        : null,
+      isPublishedUserWork: true,
+      tags,
+      description,
+      allowClone: this.data.publishAllowClone !== false,
+      allowExport: this.data.publishAllowExport !== false,
+      qrLinkType: this.data.publishQrLinkType === "none" ? "none" : "profile",
+      publishMeta: {
+        title: publishTitle,
+        tags,
+        tagsText: this.data.publishDraftTags,
+        description,
+        allowClone: this.data.publishAllowClone !== false,
+        allowExport: this.data.publishAllowExport !== false,
+        qrLinkType: this.data.publishQrLinkType === "none" ? "none" : "profile"
+      }
+    };
+  },
   async loadWork(workId) {
     if (!workId) {
       wx.showToast({ title: "作品不存在", icon: "none" });
@@ -1426,8 +2289,7 @@ Page({
     }
     this.resizeSourceImageCandidates = [
       work && work.previewImages && work.previewImages.origin,
-      work && work.previewImages && work.previewImages.ai,
-      work && work.previewImages && work.previewImages.grid
+      work && work.previewImages && work.previewImages.ai
     ]
       .filter((item) => typeof item === "string" && item.length);
     this.resizeSourceImagePath = this.resizeSourceImageCandidates[0] || "";
@@ -1452,6 +2314,13 @@ Page({
     const editorVersion = Number(editorData && editorData.version) || 0;
     const isUserEdited = Boolean(editorData && editorData.userEdited);
     const paletteVersion = String((editorData && editorData.paletteVersion) || "");
+    const maxEdgeLocked = Boolean(
+      (editorData && editorData.maxEdgeLocked)
+      || (editorData && editorData.styleMode === "cartoon")
+      || String(work && work.style || "").includes("Q版")
+    );
+    const isBlankCanvas = String(work && work.style || "") === BLANK_CANVAS_STYLE;
+    const maxEdgeLockReason = maxEdgeLocked ? "Q版作品暂不支持修改最大边长" : "";
     const shouldLegacyRemap = hasValidGrid
       && hasPackedGrid
       && !paletteVersion
@@ -1586,6 +2455,11 @@ Page({
       workName: work.title || this.data.workName,
       gridSizeText: displaySizeText,
       hasEditableGrid: true,
+      currentTool: isBlankCanvas ? "paint" : this.data.currentTool,
+      currentToolLabel: isBlankCanvas ? this.getToolLabel("paint") : this.data.currentToolLabel,
+      bottomSectionTab: isBlankCanvas ? "mard" : this.data.bottomSectionTab,
+      maxEdgeLocked,
+      maxEdgeLockReason,
       usedPalette: this.buildPaletteByIndexes(usedStats.map((item) => item.index)),
       selectedColorIndex: initialColor,
       selectedColorCode: this.getPaletteColor(initialColor).code,
@@ -2023,6 +2897,10 @@ Page({
     return `${pair.width}×${pair.height}`;
   },
   openCustomEdgeInputModal() {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     const pair = parseSizePairFromText(this.data.gridSizeText || "");
     const fallbackEdge = Math.max(
       Number(pair && pair.width) || 0,
@@ -2064,6 +2942,10 @@ Page({
     });
   },
   handleTapSizeChip() {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     this.closeEraserMenu();
     this.handleCloseColorPicker();
     this.handleCloseBeadStatsOverlay();
@@ -2135,6 +3017,10 @@ Page({
     this.setData({ showEdgePicker: false });
   },
   handleSelectEdgePreset(event) {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     const edge = parseInt(event.currentTarget.dataset.edge, 10);
     if (!Number.isFinite(edge)) return;
     this.setData({
@@ -2146,9 +3032,17 @@ Page({
     this.applyMaxEdgeChange(edge);
   },
   handleOpenCustomEdgeInput() {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     this.openCustomEdgeInputModal();
   },
   handleSelectEditorMaxEdge(event) {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     const mode = event.currentTarget.dataset.mode;
     if (!mode) return;
     this.setData({ selectedEditorMaxEdge: mode, maxEdgeError: "" });
@@ -2160,9 +3054,14 @@ Page({
     }
   },
   handleCustomEditorMaxEdgeInput(event) {
+    if (this.data.maxEdgeLocked) return;
     this.setData({ customEditorMaxEdge: event.detail.value || "", maxEdgeError: "" });
   },
   handleApplyCustomMaxEdge() {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     const val = parseInt(this.data.customEditorMaxEdge, 10);
     if (!Number.isFinite(val) || val < MIN_PATTERN_EDGE || val > MAX_PATTERN_EDGE) {
       this.setData({ maxEdgeError: `请输入${MIN_PATTERN_EDGE}-${MAX_PATTERN_EDGE}的整数` });
@@ -2363,6 +3262,10 @@ Page({
     this.resizeMaster = this.buildResizeSourceFromGrid(this.gridIndexes, this.gridSize);
   },
   applyMaxEdgeChange(newMaxEdge, options = {}) {
+    if (this.data.maxEdgeLocked) {
+      wx.showToast({ title: this.data.maxEdgeLockReason || "Q版作品暂不支持修改最大边长", icon: "none" });
+      return;
+    }
     const parsedEdge = parseInt(newMaxEdge, 10);
     if (!Number.isFinite(parsedEdge)) return;
     if (parsedEdge < MIN_PATTERN_EDGE || parsedEdge > MAX_PATTERN_EDGE) {
@@ -3344,8 +4247,7 @@ Page({
     if (!this.data.autoSaveEnabled) return;
     if (this.persistTimer) clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => {
-      this.persistEditedWork();
-      this.persistTimer = null;
+      this.flushPendingPersist();
     }, 260);
   },
   persistEditedWork(gridImagePath = "") {
@@ -3367,6 +4269,10 @@ Page({
 
     const next = {
       ...work,
+      updatedAt: Date.now(),
+      previewUpdatedAt: gridImagePath
+        ? Date.now()
+        : Number(work.previewUpdatedAt) || 0,
       size: patternSizeText || `${this.gridSize}x${this.gridSize}`,
       editorData: {
         version: EDITOR_DATA_SCHEMA_VERSION,
@@ -4864,6 +5770,7 @@ Page({
   },
   async openExportPanel() {
     await this.setDataAsync({
+      showSaveMenu: false,
       showExportPanel: true,
       exportShowGrid: this.exportSettings ? this.exportSettings.showGrid !== false : true,
       exportShowCodes: this.exportSettings ? this.exportSettings.showCodes !== false : true,
@@ -4952,6 +5859,106 @@ Page({
   },
   closeExportPreviewViewer() {
     this.setData({ showExportPreviewViewer: false }, () => this.requestRedraw(false));
+  },
+  async handleSaveWork() {
+    if (!this.data.hasEditableGrid) {
+      wx.showToast({ title: "暂无可保存的作品", icon: "none" });
+      return;
+    }
+    this.flushPendingPersist();
+    wx.showToast({ title: "作品已保存", icon: "success" });
+  },
+  async handlePublishWork() {
+    if (!this.data.hasEditableGrid || !this.data.workId) {
+      wx.showToast({ title: "暂无可发布的作品", icon: "none" });
+      return;
+    }
+    const publishTitle = this.normalizePublishTitle(this.data.publishDraftTitle);
+    if (!publishTitle || publishTitle.length < 2) {
+      wx.showToast({ title: "请输入2-20字作品名称", icon: "none" });
+      return;
+    }
+    this.flushPendingPersist();
+    const currentWork = this.getCurrentWorkRecord();
+    if (!currentWork) {
+      wx.showToast({ title: "作品不存在，无法发布", icon: "none" });
+      return;
+    }
+
+    const publishedList = this.readPublishedPaperLibrary();
+    const existingRecord = publishedList.find((item) => item && item.sourceWorkId === this.data.workId);
+    const loadingTitle = existingRecord ? "更新发布中" : "发布作品中";
+
+    this.setData({ publishBusy: true });
+    wx.showLoading({ title: loadingTitle, mask: true });
+    try {
+      let previewImage = "";
+      try {
+        previewImage = await this.buildPublishPreviewImage();
+      } catch (previewError) {
+        console.warn("build publish preview failed", previewError);
+      }
+      if (!previewImage) {
+        previewImage = String(
+          (currentWork.previewImages && (
+            currentWork.previewImages.grid
+            || currentWork.previewImages.ai
+            || currentWork.previewImages.origin
+          )) || ""
+        );
+      }
+
+      const nextRecord = this.buildPublishedPaperRecord(currentWork, existingRecord, previewImage);
+      const nextList = existingRecord
+        ? publishedList.map((item) => (item && item.sourceWorkId === this.data.workId ? nextRecord : item))
+        : [nextRecord, ...publishedList];
+      this.writePublishedPaperLibrary(nextList);
+      const currentLibrary = this.readWorkLibrary();
+      const workIndex = currentLibrary.findIndex((item) => item && item.id === this.data.workId);
+      if (workIndex >= 0) {
+        currentLibrary[workIndex] = {
+          ...currentLibrary[workIndex],
+          title: nextRecord.title,
+          previewUpdatedAt: previewImage ? Date.now() : Number(currentLibrary[workIndex].previewUpdatedAt) || 0,
+          previewImages: {
+            ...(currentLibrary[workIndex].previewImages || {}),
+            grid: previewImage || (currentLibrary[workIndex].previewImages && currentLibrary[workIndex].previewImages.grid) || ""
+          }
+        };
+        this.writeWorkLibrary(currentLibrary);
+      }
+      this.setData({
+        workName: nextRecord.title,
+        showPublishModal: false
+      });
+      wx.showToast({
+        title: existingRecord ? "已更新广场作品" : "已发布到图纸广场",
+        icon: "success"
+      });
+    } catch (error) {
+      console.error("publish work failed", error);
+      wx.showToast({ title: "发布失败，请重试", icon: "none" });
+    } finally {
+      this.setData({ publishBusy: false });
+      wx.hideLoading();
+    }
+  },
+  async handleSaveMenuAction(event) {
+    const action = event && event.currentTarget && event.currentTarget.dataset
+      ? String(event.currentTarget.dataset.action || "")
+      : "";
+    this.handleCloseSaveMenu();
+    if (action === "save") {
+      await this.handleSaveWork();
+      return;
+    }
+    if (action === "export") {
+      await this.openExportPanel();
+      return;
+    }
+    if (action === "publish") {
+      this.openPublishModal();
+    }
   },
   handlePreviewZoomOut() {
     this.updateExportViewerScale(this.data.exportViewerScale - 0.25);
@@ -5133,10 +6140,11 @@ Page({
       wx.showToast({ title: "暂无可导出的图纸", icon: "none" });
       return;
     }
+    const nextVisible = !this.data.showSaveMenu;
     this.closeEraserMenu();
     this.handleCloseColorPicker();
     this.handleCloseBeadStatsOverlay();
-    this.openExportPanel();
+    this.setData({ showSaveMenu: nextVisible });
   },
   handleEnterBeadMode() {
     if (!this.data.hasEditableGrid || !this.data.workId) {

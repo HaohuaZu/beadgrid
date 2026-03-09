@@ -7,39 +7,64 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="page">
-      <header class="hero">
-        <div class="hero-main">
-          <div class="hero-logo-wrap">
-            <img class="hero-logo" src="/assets/logo.png" alt="豆像工坊Logo" />
-          </div>
-          <div class="hero-copy">
-          <p class="eyebrow">豆像工坊</p>
-          <h1>拼豆图纸设计，就来豆像工坊</h1>
-          <p class="subhead">
-            几秒内把照片一键转换成可拼的像素网格，支持导出超清PDF与PNG
-          </p>
-          </div>
-        </div>
-      </header>
+    <div class="app-shell">
+      <main class="app-main">
+        <section id="squareView" class="app-view"></section>
 
-      <section class="quick-links" aria-label="查看适合场景和效果展示">
-        <a id="openScenarioModal" class="text-link" href="#scenarioModal">适合场景</a>
-        <span class="quick-links-separator" aria-hidden="true">/</span>
-        <a id="openEffectShowcaseModal" class="text-link" href="#effectShowcaseModal">效果展示</a>
-      </section>
+        <section id="createView" class="app-view is-active">
+          <div class="page create-page">
+            <input id="imageInput" class="file-input-hidden" type="file" accept="image/*" />
+            <div id="createWorksList" class="create-works-list"></div>
 
-      <main class="layout">
-        <input id="imageInput" class="file-input-hidden" type="file" accept="image/*" />
+            <main class="layout">
 
-        <section class="panel preview-panel">
+              <section class="panel preview-panel">
           <div class="panel-header">
             <h2>预览</h2>
             <p id="status">请先上传图片开始生成。</p>
           </div>
           <div class="preview-top-actions">
             <button id="previewReuploadTrigger" class="primary upload-trigger" type="button">上传图片 & 重新上传</button>
+            <button id="regenerateButton" class="secondary upload-trigger" type="button" disabled>重新生成</button>
           </div>
+
+          <section class="workflow-strip" aria-label="生成流程预览">
+            <button id="originPreviewCard" class="workflow-card" type="button" data-preview-type="origin" disabled>
+              <div class="workflow-card-head">
+                <span class="workflow-step">01</span>
+                <span class="workflow-title">原图</span>
+              </div>
+              <div class="workflow-thumb">
+                <img id="originPreviewImage" class="workflow-thumb-image" alt="原图预览" hidden />
+                <div id="originPreviewPlaceholder" class="workflow-thumb-placeholder">上传后显示原图</div>
+              </div>
+              <p id="originPreviewMeta" class="workflow-meta">建议裁剪到头像或上半身，主体更稳定。</p>
+            </button>
+
+            <button id="stylizedPreviewCard" class="workflow-card" type="button" data-preview-type="stylized" disabled>
+              <div class="workflow-card-head">
+                <span class="workflow-step">02</span>
+                <span id="stylizedPreviewLabel" class="workflow-title">AI图</span>
+              </div>
+              <div class="workflow-thumb">
+                <img id="stylizedPreviewImage" class="workflow-thumb-image" alt="中间图预览" hidden />
+                <div id="stylizedPreviewPlaceholder" class="workflow-thumb-placeholder">生成后显示中间稿</div>
+              </div>
+              <p id="stylizedPreviewMeta" class="workflow-meta">精致像素会直接生成，Q版模式会先输出中间稿。</p>
+            </button>
+
+            <button id="gridPreviewCard" class="workflow-card" type="button" data-preview-type="grid" disabled>
+              <div class="workflow-card-head">
+                <span class="workflow-step">03</span>
+                <span class="workflow-title">图纸</span>
+              </div>
+              <div class="workflow-thumb">
+                <img id="gridPreviewImage" class="workflow-thumb-image workflow-thumb-image-pixel" alt="图纸预览" hidden />
+                <div id="gridPreviewPlaceholder" class="workflow-thumb-placeholder">生成后显示拼豆图纸</div>
+              </div>
+              <p id="gridPreviewMeta" class="workflow-meta">支持放大看格子、导出 PNG/PDF 和色号统计。</p>
+            </button>
+          </section>
 
           <div class="canvas-wrap">
             <figure class="preview-surface">
@@ -78,13 +103,35 @@
             <button id="legendToggle" type="button" class="secondary legend-toggle" hidden>展开全部颜色明细</button>
           </div>
           <div class="legend" id="legend"></div>
-        </section>
+              </section>
 
-        <section class="panel form-panel">
+              <section class="panel form-panel">
           <h2>参数设置</h2>
-          <p class="panel-lead">先在预览框上传图片，再按顺序设置参数。</p>
+          <p class="panel-lead">网站版已补齐为完整工作台：上传、Q版/像素模式、图纸生成和导出都在这里完成。</p>
 
           <form id="patternForm">
+            <label class="field">
+              <span>作品名称</span>
+              <input id="workName" type="text" maxlength="20" placeholder="例如：奶油猫头像" />
+              <small class="field-hint">用于导出文件名和当前作品标识，不填会自动命名。</small>
+            </label>
+
+            <div class="field">
+              <span>已选图片</span>
+              <div class="upload-summary">
+                <div id="uploadFilename" class="upload-filename">未选择图片</div>
+                <button id="uploadTrigger" class="secondary upload-trigger" type="button">选择图片</button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>生成风格</span>
+              <select id="styleMode">
+                <option value="fine">精致像素</option>
+                <option value="cartoon">卡通像素（Q版）</option>
+              </select>
+              <small id="styleModeHint" class="field-hint">精致像素直接转拼豆图纸，细节保留更多。</small>
+            </label>
 
             <label class="field">
               <span>网格尺寸</span>
@@ -130,6 +177,11 @@
 
           </form>
 
+          <div class="actions workspace-actions">
+            <button id="generateNowButton" class="primary upload-trigger" type="button">立即生成图纸</button>
+            <button id="clearWorkspaceButton" class="secondary upload-trigger" type="button">清空当前作品</button>
+          </div>
+
           <p class="export-hint">用 MARD 221 固定色盘压色，并支持对应 Artkal M 2.6mm 等主流迷你拼豆色卡，方便按号买豆和数颗粒。</p>
           <div id="wechatExportNotice" class="wechat-export-notice" hidden>
             <p id="wechatExportNoticeText">检测到你正在微信内打开，导出文件可能被拦截。</p>
@@ -141,14 +193,28 @@
             <button id="exportPng" class="primary upload-trigger export-action" disabled>导出 PNG</button>
             <button id="exportPdf" class="primary upload-trigger export-action" disabled>导出 PDF</button>
           </div>
+              </section>
+            </main>
+          </div>
         </section>
+
+        <section id="profileView" class="app-view"></section>
       </main>
 
-      <section class="contact-card">
-        <h3>遇到问题可以直接联系作者</h3>
-        <p>如果你在用这款生成器的过程中遇到任何问题（比如不知道选哪张照片、买哪些豆、怎么排版成礼物），可以加作者微信 <strong>Xuanlin8n</strong>，一对一帮你看图纸。</p>
-        <p>也欢迎关注公众号和小红书『豆像工坊』，获取更多宠物头像、情侣头像的拼豆案例和免费模板。</p>
-      </section>
+      <nav class="site-tabbar" aria-label="主导航">
+        <button class="site-tab is-active" type="button" data-view="square">
+          <span class="site-tab-icon icon-home"></span>
+          <span class="site-tab-text">图纸广场</span>
+        </button>
+        <button class="site-tab" type="button" data-view="create">
+          <span class="site-tab-icon icon-create"></span>
+          <span class="site-tab-text">创作</span>
+        </button>
+        <button class="site-tab" type="button" data-view="profile">
+          <span class="site-tab-icon icon-profile"></span>
+          <span class="site-tab-text">我的</span>
+        </button>
+      </nav>
     </div>
 
     <div id="scenarioModal" class="zoom-modal info-modal" hidden>

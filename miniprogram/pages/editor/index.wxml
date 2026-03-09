@@ -1,10 +1,135 @@
 <view class="editor-page">
+  <view wx:if="{{showSaveMenu}}" class="save-menu-mask" bindtap="handleCloseSaveMenu"></view>
+  <view wx:if="{{showPublishModal}}" class="publish-mask" bindtap="handleClosePublishModal">
+    <view class="publish-modal brand-panel" catchtap="noop">
+      <view class="publish-modal-head">
+        <view class="publish-modal-title">发布作品</view>
+      </view>
 
-  <view class="editor-top-wrap">
-    <view class="editor-top-row">
-      <view class="size-chip size-chip-clickable" catchtap="handleTapSizeChip">
+      <view class="publish-modal-body">
+        <view class="publish-field">
+          <view class="publish-label">作品名称:</view>
+          <input
+            class="publish-input"
+            type="text"
+            maxlength="20"
+            placeholder="请输入2-20字作品名称"
+            value="{{publishDraftTitle}}"
+            bindinput="handlePublishTitleInput"
+          />
+        </view>
+
+        <view class="publish-field">
+          <view class="publish-label">标签:</view>
+          <input
+            class="publish-input"
+            type="text"
+            maxlength="80"
+            placeholder="输入标签，空格分隔"
+            value="{{publishDraftTags}}"
+            bindinput="handlePublishTagsInput"
+          />
+        </view>
+
+        <view class="publish-field">
+          <view class="publish-label">作品描述:</view>
+          <textarea
+            class="publish-textarea"
+            maxlength="300"
+            placeholder="简单介绍作品灵感、适用场景或制作心得"
+            value="{{publishDraftDesc}}"
+            bindinput="handlePublishDescInput"
+          ></textarea>
+          <view class="publish-count">{{publishDraftDesc.length}}/300</view>
+        </view>
+
+        <view class="publish-field">
+          <view class="publish-label">是否可给他人复制:</view>
+          <view class="publish-radio-row">
+            <view
+              class="publish-radio {{publishAllowClone ? 'is-active' : ''}}"
+              data-field="publishAllowClone"
+              data-value="true"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{publishAllowClone ? '✓' : ''}}</view>
+              <text class="publish-radio-text">可复制</text>
+            </view>
+            <view
+              class="publish-radio {{!publishAllowClone ? 'is-active' : ''}}"
+              data-field="publishAllowClone"
+              data-value="false"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{!publishAllowClone ? '✓' : ''}}</view>
+              <text class="publish-radio-text">不可复制</text>
+            </view>
+          </view>
+        </view>
+
+        <view class="publish-field">
+          <view class="publish-label">是否可给他人导出图片:</view>
+          <view class="publish-radio-row">
+            <view
+              class="publish-radio {{publishAllowExport ? 'is-active' : ''}}"
+              data-field="publishAllowExport"
+              data-value="true"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{publishAllowExport ? '✓' : ''}}</view>
+              <text class="publish-radio-text">可导出</text>
+            </view>
+            <view
+              class="publish-radio {{!publishAllowExport ? 'is-active' : ''}}"
+              data-field="publishAllowExport"
+              data-value="false"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{!publishAllowExport ? '✓' : ''}}</view>
+              <text class="publish-radio-text">不可导出</text>
+            </view>
+          </view>
+        </view>
+
+        <view class="publish-field">
+          <view class="publish-label">导出图片二维码链接:</view>
+          <view class="publish-radio-row">
+            <view
+              class="publish-radio {{publishQrLinkType === 'none' ? 'is-active' : ''}}"
+              data-field="publishQrLinkType"
+              data-value="none"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{publishQrLinkType === 'none' ? '✓' : ''}}</view>
+              <text class="publish-radio-text">无</text>
+            </view>
+            <view
+              class="publish-radio {{publishQrLinkType === 'profile' ? 'is-active' : ''}}"
+              data-field="publishQrLinkType"
+              data-value="profile"
+              bindtap="handlePublishToggle"
+            >
+              <view class="publish-radio-icon">{{publishQrLinkType === 'profile' ? '✓' : ''}}</view>
+              <text class="publish-radio-text">个人主页</text>
+            </view>
+          </view>
+        </view>
+
+        <view class="publish-tip">发布后将展示在图纸广场中，当前作品编辑内容会一并保存。</view>
+      </view>
+
+      <view class="publish-actions">
+        <button class="publish-btn publish-btn-cancel" bindtap="handleClosePublishModal" disabled="{{publishBusy}}">取消</button>
+        <button class="publish-btn publish-btn-confirm" bindtap="handlePublishWork" loading="{{publishBusy}}" disabled="{{publishBusy}}">发布</button>
+      </view>
+    </view>
+  </view>
+
+  <view class="editor-top-wrap {{showSaveMenu ? 'is-save-menu-open' : ''}}">
+    <view class="editor-top-row {{showSaveMenu ? 'is-save-menu-open' : ''}}">
+      <view class="size-chip {{maxEdgeLocked ? '' : 'size-chip-clickable'}}" catchtap="handleTapSizeChip">
         {{gridSizeText}}
-        <text class="size-chip-arrow">▾</text>
+        <text class="size-chip-arrow">{{maxEdgeLocked ? '锁' : '▾'}}</text>
       </view>
       <view class="gesture-tip">双指缩放</view>
       <view class="top-history-actions">
@@ -25,7 +150,26 @@
       </view>
       <view class="editor-top-actions">
         <view class="top-action-btn bead-mode-btn" bindtap="handleEnterBeadMode">开始拼豆</view>
-        <view class="top-action-btn export-btn" bindtap="handleSaveExport">保存/导图</view>
+        <view class="save-menu-wrap">
+          <view class="top-action-btn export-btn save-menu-trigger {{showSaveMenu ? 'is-open' : ''}}" bindtap="handleSaveExport">
+            <text>保存/导图</text>
+            <text class="save-menu-caret">▼</text>
+          </view>
+          <view wx:if="{{showSaveMenu}}" class="save-menu-panel brand-panel" catchtap="noop">
+            <view class="save-menu-item" data-action="save" bindtap="handleSaveMenuAction">
+              <view class="save-menu-item-title">保存作品</view>
+              <view class="save-menu-item-sub">立即保存当前编辑内容，退出编辑器时也会自动保存。</view>
+            </view>
+            <view class="save-menu-item" data-action="export" bindtap="handleSaveMenuAction">
+              <view class="save-menu-item-title">导出图片</view>
+              <view class="save-menu-item-sub">打开导出面板，保存高清 PNG 图片到相册。</view>
+            </view>
+            <view class="save-menu-item" data-action="publish" bindtap="handleSaveMenuAction">
+              <view class="save-menu-item-title">发布作品</view>
+              <view class="save-menu-item-sub">把当前作品发布到图纸广场，方便继续展示与复用。</view>
+            </view>
+          </view>
+        </view>
       </view>
     </view>
   </view>
@@ -90,15 +234,15 @@
 
   <view class="canvas-panel brand-panel">
     <view
-      class="canvas-stage {{(showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer) ? 'is-overlay-open' : ''}}"
+      class="canvas-stage {{(showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer || showPublishModal) ? 'is-overlay-open' : ''}}"
       catchtouchmove="handleStageTouchMove"
     >
       <canvas
         id="editorCanvasNode"
         type="2d"
         canvas-id="editorCanvas"
-        class="editor-canvas {{(showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer) ? 'is-overlay-open' : ''}}"
-        hidden="{{showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer}}"
+        class="editor-canvas {{(showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer || showPublishModal) ? 'is-overlay-open' : ''}}"
+        hidden="{{showColorPicker || showBeadStatsOverlay || showEdgePicker || showExportPanel || showExportPreviewViewer || showPublishModal}}"
         width="{{canvasWidth}}"
         height="{{canvasHeight}}"
         catchtouchstart="handleCanvasTouchStart"
@@ -242,7 +386,7 @@
     <view class="export-panel brand-panel" catchtap="noop">
       <view class="export-panel-head">
         <view>
-          <view class="export-panel-title">保存和导图</view>
+          <view class="export-panel-title">导出图片</view>
           <view class="export-panel-sub">支持导出高清图片，并可选择是否显示网格与色号。</view>
         </view>
         <view class="export-panel-close" bindtap="closeExportPanel">关闭</view>

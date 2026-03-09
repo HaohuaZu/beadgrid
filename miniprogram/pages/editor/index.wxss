@@ -65,6 +65,14 @@
   z-index: 10;
 }
 
+.editor-top-wrap.is-save-menu-open {
+  z-index: 120;
+}
+
+.editor-top-row.is-save-menu-open {
+  z-index: 121;
+}
+
 .edge-picker-mask {
   position: fixed;
   inset: 0;
@@ -404,6 +412,7 @@
   align-items: center;
   gap: 2rpx;
   width: auto;
+  position: relative;
 }
 
 .top-action-btn {
@@ -420,6 +429,228 @@
   white-space: nowrap;
   font-size: 18rpx;
   font-weight: 700;
+}
+
+.save-menu-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 88;
+  background: transparent;
+}
+
+.save-menu-wrap {
+  position: relative;
+  z-index: 92;
+}
+
+.save-menu-trigger {
+  gap: 6rpx;
+  position: relative;
+  z-index: 93;
+}
+
+.save-menu-trigger.is-open .save-menu-caret {
+  transform: rotate(180deg);
+}
+
+.save-menu-caret {
+  font-size: 16rpx;
+  line-height: 1;
+  transition: transform 0.2s ease;
+}
+
+.save-menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10rpx);
+  z-index: 94;
+  width: 348rpx;
+  padding: 10rpx;
+  border-radius: 18rpx;
+  background: rgba(255, 250, 252, 0.98);
+  box-shadow: 0 18rpx 36rpx rgba(31, 36, 48, 0.16);
+  border: 1rpx solid rgba(255, 206, 217, 0.9);
+}
+
+.save-menu-item {
+  padding: 14rpx 16rpx;
+  border-radius: 14rpx;
+}
+
+.save-menu-item + .save-menu-item {
+  margin-top: 6rpx;
+}
+
+.save-menu-item:active {
+  background: #fff1f4;
+}
+
+.save-menu-item-title {
+  font-size: 24rpx;
+  font-weight: 700;
+  color: #1f2430;
+}
+
+.save-menu-item-sub {
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #667085;
+}
+
+.publish-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 5400;
+  background: rgba(15, 23, 42, 0.26);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24rpx;
+  box-sizing: border-box;
+}
+
+.publish-modal {
+  width: 100%;
+  max-width: 720rpx;
+  max-height: 88vh;
+  overflow: auto;
+  padding: 0;
+  border-radius: 28rpx;
+  background: #f7f8fa;
+}
+
+.publish-modal-head {
+  padding: 28rpx 30rpx 22rpx;
+  border-bottom: 1rpx solid #e7e9ee;
+}
+
+.publish-modal-title {
+  font-size: 46rpx;
+  font-weight: 800;
+  color: #1f2430;
+}
+
+.publish-modal-body {
+  padding: 24rpx 30rpx 26rpx;
+}
+
+.publish-field + .publish-field {
+  margin-top: 26rpx;
+}
+
+.publish-label {
+  font-size: 28rpx;
+  font-weight: 800;
+  color: #394150;
+}
+
+.publish-input,
+.publish-textarea {
+  width: 100%;
+  margin-top: 14rpx;
+  box-sizing: border-box;
+  border-radius: 22rpx;
+  border: 1rpx solid #dfe3e9;
+  background: #f1f3f6;
+  color: #1f2430;
+}
+
+.publish-input {
+  height: 96rpx;
+  padding: 0 24rpx;
+  font-size: 26rpx;
+  line-height: 96rpx;
+}
+
+.publish-textarea {
+  min-height: 210rpx;
+  padding: 22rpx 24rpx;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.publish-count {
+  margin-top: 10rpx;
+  text-align: right;
+  font-size: 22rpx;
+  color: #8b94a3;
+}
+
+.publish-radio-row {
+  margin-top: 16rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20rpx 34rpx;
+}
+
+.publish-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 14rpx;
+  color: #1f2430;
+  font-size: 26rpx;
+  font-weight: 700;
+}
+
+.publish-radio-icon {
+  width: 44rpx;
+  height: 44rpx;
+  border-radius: 50%;
+  border: 2rpx solid #cad0da;
+  background: #ffffff;
+  color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-size: 30rpx;
+  line-height: 1;
+}
+
+.publish-radio.is-active .publish-radio-icon {
+  border-color: #16c60c;
+  background: #16c60c;
+  color: #ffffff;
+}
+
+.publish-radio-text {
+  line-height: 1;
+}
+
+.publish-tip {
+  margin-top: 28rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #667085;
+}
+
+.publish-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1rpx solid #e7e9ee;
+}
+
+.publish-btn {
+  height: 96rpx;
+  border-radius: 0;
+  border: none;
+  font-size: 28rpx;
+  font-weight: 800;
+}
+
+.publish-btn::after {
+  border: none;
+}
+
+.publish-btn-cancel {
+  background: #f0f1f3;
+  color: #667085;
+}
+
+.publish-btn-confirm {
+  background: #1677ff;
+  color: #ffffff;
 }
 
 .top-history-icon {

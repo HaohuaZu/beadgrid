@@ -29,7 +29,7 @@
       "xhdpi": "",
       "xxhdpi": ""
     },
-    "enableVConsole": "open",
+    "enableVConsole": "close",
     "privacy": {
       "enable": true
     }
@@ -45,7 +45,7 @@
       "WeAppLBS": false,
       "WeAppOthers": false
     },
-    "enableVConsole": "open",
+    "enableVConsole": "close",
     "icons": {
       "mainIcon120": "",
       "mainIcon180": "",
