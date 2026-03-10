@@ -4,7 +4,8 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "start": "node server.js"
   },
   "dependencies": {
     "@openclaw/feishu": "^2026.3.2",

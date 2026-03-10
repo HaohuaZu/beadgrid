@@ -19,6 +19,14 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "bead-pattern-mvp",
+    timestamp: Date.now()
+  });
+});
+
 function loadLocalEnvFile(filePath) {
   let raw = "";
   try {
@@ -44,7 +52,9 @@ function loadLocalEnvFile(filePath) {
   });
 }
 
-loadLocalEnvFile(path.join(__dirname, ".env.local"));
+if (process.env.NODE_ENV !== "production") {
+  loadLocalEnvFile(path.join(__dirname, ".env.local"));
+}
 
 const GRID_SIZES = [52, 104];
 const DEFAULT_GRID_SIZE = GRID_SIZES[0];
@@ -3057,15 +3067,15 @@ app.post("/api/generate", upload.single("image"), async (req, res) => {
   }
 });
 
-const port = 3000;
+const port = Number.parseInt(process.env.PORT, 10) || 3000;
 const server = app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log(`Server running on port ${port}`);
 });
 
 server.on("error", (error) => {
   if (error && error.code === "EADDRINUSE") {
-    console.error("端口 3000 已被占用。");
-    console.error("可执行: lsof -tiTCP:3000 -sTCP:LISTEN | xargs kill");
+    console.error(`端口 ${port} 已被占用。`);
+    console.error(`可执行: lsof -tiTCP:${port} -sTCP:LISTEN | xargs kill`);
     process.exit(1);
   }
 

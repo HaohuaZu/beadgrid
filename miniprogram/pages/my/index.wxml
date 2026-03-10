@@ -294,6 +294,7 @@
             disabled="{{isConverting}}"
             loading="{{isConverting}}"
           >{{isConverting ? 'AI转换中...' : '开始AI转换'}}</button>
+          <view class="start-convert-note">由 AI 生成</view>
         </view>
       </scroll-view>
     </view>

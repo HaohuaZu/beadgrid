@@ -1,9 +1,49 @@
 # Q版接口部署说明
 
+## 微信云托管版
+
+当前项目已经调整为可直接部署到微信云托管的 `Node.js + Express` 服务。
+
+### 推荐模板
+
+- 选择模板：`Express.js`
+
+### 部署前需要配置
+
+1. 在微信云托管里为服务配置环境变量：
+
+```bash
+DOUBAO_SEEDREAM_MODEL=doubao-seedream-4-5
+DOUBAO_SEEDREAM_API_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
+DOUBAO_SEEDREAM_AUTH_SCHEME=Bearer
+DOUBAO_SEEDREAM_API_KEY=你的豆包 API Key
+```
+
+2. 小程序前端里配置云托管访问地址：
+
+- 修改 `miniprogram/app.js`
+- 把 `CLOUD_API_BASE_URL` 填成你的云托管公网域名，例如：
+
+```js
+const CLOUD_API_BASE_URL = "https://你的云托管域名";
+```
+
+3. 在微信小程序后台把该云托管域名加入 `request 合法域名`。
+
+### 云托管自检
+
+部署成功后先访问：
+
+```bash
+GET /healthz
+```
+
+返回 `{"ok":true,...}` 说明服务已经正常启动。
+
 ## 当前地址策略
 
-- 微信开发者工具：自动走 `http://127.0.0.1:3000`
-- 真机：自动走 `http://175.178.0.34`
+- 微信开发者工具：默认走 `http://127.0.0.1:3000`
+- 真机 / 线上：走 `miniprogram/app.js` 里的 `CLOUD_API_BASE_URL`
 
 对应代码：
 - `miniprogram/app.js`
@@ -32,7 +72,7 @@ npm run dev
 
 ## 真机部署
 
-真机不会访问你电脑的 `127.0.0.1`，所以需要把最新后端部署到 `175.178.0.34`。
+真机不会访问你电脑的 `127.0.0.1`，所以需要把后端部署到微信云托管，或者部署到一个对外可访问的正式域名。
 
 ### 需要同步的文件
 

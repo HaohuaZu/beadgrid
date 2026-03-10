@@ -5291,7 +5291,7 @@ Page({
     for (let i = 0; i < list.length; i += 1) {
       const item = list[i] || {};
       const codeText = String(item.code || "");
-      const metaText = `× ${Number(item.count) || 0}`;
+      const metaText = `${Number(item.count) || 0}颗`;
       const chipHex = item.hex || "#000000";
       const col = i % columns;
       const row = Math.floor(i / columns);
@@ -5354,6 +5354,7 @@ Page({
     const contentWidth = Math.max(320, width - pagePadding * 2);
     const gridGap = Math.max(18, Math.floor(width * 0.016));
     const list = Array.isArray(legend) ? legend : [];
+    const legendCount = list.length;
     const panelPaddingX = Math.max(16, Math.floor(width * 0.011));
     const panelPaddingY = Math.max(14, Math.floor(width * 0.010));
     const titleSize = clamp(Math.floor(width * 0.020), 22, 52);
@@ -5361,18 +5362,25 @@ Page({
     const titleGap = Math.max(10, Math.floor(width * 0.007));
     const chipsTopGap = Math.max(16, Math.floor(width * 0.011));
     const gridSize = Math.max(320, Math.floor(contentWidth));
+    const preferredLegendColumns = legendCount >= 54
+      ? 14
+      : legendCount >= 36
+        ? 12
+        : legendCount >= 18
+          ? 10
+          : 8;
     const chipConfig = {
-      swatchSize: clamp(Math.floor(width * 0.012), 14, 30),
-      chipHeight: clamp(Math.floor(width * (mode === "standard" ? 0.024 : 0.021)), 36, 56),
-      chipPadX: clamp(Math.floor(width * 0.006), 8, 16),
-      textGap: clamp(Math.floor(width * 0.005), 8, 14),
-      codeSize: clamp(Math.floor(width * 0.0105), 13, 24),
-      metaSize: clamp(Math.floor(width * 0.0084), 11, 20),
-      colGap: clamp(Math.floor(width * 0.0055), 8, 14),
-      rowGap: clamp(Math.floor(width * 0.0055), 8, 14),
-      minChipWidth: clamp(Math.floor(width * 0.048), 56, 110),
-      maxChipWidth: clamp(Math.floor(width * 0.072), 92, 128),
-      preferredColumns: mode === "standard" ? 8 : 10
+      swatchSize: clamp(Math.floor(width * 0.014), 22, 36),
+      chipHeight: clamp(Math.floor(width * (mode === "standard" ? 0.027 : 0.025)), 58, 80),
+      chipPadX: clamp(Math.floor(width * 0.0045), 8, 14),
+      textGap: clamp(Math.floor(width * 0.004), 8, 14),
+      codeSize: clamp(Math.floor(width * 0.0105), 15, 24),
+      metaSize: clamp(Math.floor(width * 0.009), 13, 20),
+      colGap: clamp(Math.floor(width * 0.005), 10, 16),
+      rowGap: clamp(Math.floor(width * 0.0055), 10, 18),
+      minChipWidth: clamp(Math.floor(width * 0.055), 120, 160),
+      maxChipWidth: clamp(Math.floor(width * 0.075), 180, 220),
+      preferredColumns: mode === "standard" ? Math.min(preferredLegendColumns, 12) : preferredLegendColumns
     };
     const chipLayout = this.computeLegendChipLayout(
       list,
@@ -5616,57 +5624,52 @@ Page({
       + (layout.chipsTopGap || 18);
     const chips = Array.isArray(layout.chips) ? layout.chips : [];
     chips.forEach((chip) => {
-      const cardX = layout.x + (layout.panelPaddingX || 0) + chip.x;
-      const cardY = chipsTop + chip.y;
-
-      ctx.setFillStyle("#FFFFFF");
-      this.drawRoundedRectPath(
-        ctx,
-        cardX,
-        cardY,
-        chip.width,
-        chip.height,
-        Math.max(10, Math.floor(chip.height * 0.28))
+      const itemX = layout.x + (layout.panelPaddingX || 0) + chip.x;
+      const itemY = chipsTop + chip.y;
+      const swatchSize = Math.max(
+        24,
+        Math.min(
+          chip.swatchSize || 0,
+          chip.height - 10,
+          Math.floor(chip.width * 0.34)
+        )
       );
-      ctx.fill();
-      ctx.setStrokeStyle("#E4D6BE");
-      ctx.setLineWidth(1.4);
-      ctx.stroke();
+      const swatchX = itemX + (chip.chipPadX || 0);
+      const swatchY = itemY + Math.floor((chip.height - swatchSize) / 2);
+      const textX = swatchX + swatchSize + (chip.textGap || 0);
+      const codeY = itemY + Math.max(2, Math.floor(chip.height * 0.14));
+      const metaY = itemY + Math.max(24, Math.floor(chip.height * 0.54));
 
-      const swatchPadX = Math.max(6, Math.floor(chip.width * 0.07));
-      const swatchTop = cardY + Math.max(4, Math.floor(chip.height * 0.08));
-      const swatchW = Math.max(12, chip.width - swatchPadX * 2);
-      const swatchH = Math.max(16, Math.floor(chip.height * 0.56));
       ctx.setFillStyle(chip.hex || "#000000");
       this.drawRoundedRectPath(
         ctx,
-        cardX + swatchPadX,
-        swatchTop,
-        swatchW,
-        swatchH,
-        Math.max(6, Math.floor(swatchH * 0.24))
+        swatchX,
+        swatchY,
+        swatchSize,
+        swatchSize,
+        Math.max(6, Math.floor(swatchSize * 0.16))
       );
       ctx.fill();
-      ctx.setStrokeStyle("rgba(15,23,42,0.12)");
-      ctx.setLineWidth(1);
+      ctx.setStrokeStyle("rgba(42,29,18,0.18)");
+      ctx.setLineWidth(1.2);
       ctx.stroke();
 
-      ctx.setTextAlign("center");
-      ctx.setTextBaseline("middle");
-      ctx.setFillStyle(chip.textColor || this.getTextColorByHex(chip.hex));
-      ctx.setFontSize(Math.max(10, Math.floor(Math.min(chip.codeSize, swatchH * 0.52))));
+      ctx.setTextAlign("left");
+      ctx.setTextBaseline("top");
+      ctx.setFillStyle("#2A1D12");
+      ctx.setFontSize(Math.max(14, chip.codeSize));
       ctx.fillText(
         chip.codeText || "",
-        cardX + chip.width / 2,
-        swatchTop + swatchH / 2
+        textX,
+        codeY
       );
 
       ctx.setFillStyle("#65594A");
-      ctx.setFontSize(Math.max(10, chip.metaSize));
+      ctx.setFontSize(Math.max(12, chip.metaSize));
       ctx.fillText(
         chip.metaText || "",
-        cardX + chip.width / 2,
-        cardY + Math.floor(chip.height * 0.82)
+        textX,
+        metaY
       );
     });
   },
